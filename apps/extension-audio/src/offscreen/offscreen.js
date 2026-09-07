@@ -71,10 +71,34 @@ async function start({ sessionId, streamId, settings }) {
   let micStream = null;
   if (mode === 'mic' || mode === 'mic+tab') {
     const raw = g('audioProc.rawMode', false);
+
+    // Устройство хранится как {deviceId,label,groupId}, а не строкой: deviceId
+    // засолен по origin и меняется при очистке данных сайта. Если по id не
+    // нашли — ищем по метке и группе, и ЗАПИСЫВАЕМ, каким путём нашли.
+    const stored = g('source.micDeviceId', 'default');
+    const followDefault = g('source.micFollowSystemDefault', true);
+    let micResolution = { requested: stored, match: 'default', device: null };
+
+    if (stored && stored !== 'default') {
+      const devices = (await navigator.mediaDevices.enumerateDevices())
+        .filter((d) => d.kind === 'audioinput');
+      micResolution = resolveStoredDevice(stored, devices);
+      if (micResolution.match === 'not_found') {
+        throw new Error(
+          `Выбранный микрофон «${stored.label ?? stored}» сейчас недоступен. `
+          + 'Выберите другой в настройках. Автоматически переключаться нельзя: '
+          + 'запись пошла бы не с того входа, и вы узнали бы об этом из файла.',
+        );
+      }
+    }
+
     const constraints = {
       audio: {
-        deviceId: g('source.micDeviceId', 'default') === 'default'
-          ? undefined : { exact: g('source.micDeviceId') },
+        deviceId: micResolution.device
+          // exact — намеренно: ideal позволил бы браузеру тихо взять другое
+          // устройство, и замер стал бы необъяснимым.
+          ? { exact: micResolution.device.deviceId }
+          : (followDefault ? undefined : undefined),
         echoCancellation: raw ? false : g('audioProc.echoCancellation', true),
         noiseSuppression: raw ? false : g('audioProc.noiseSuppression', true),
         autoGainControl:  raw ? false : g('audioProc.autoGainControl', true),
@@ -92,8 +116,15 @@ async function start({ sessionId, streamId, settings }) {
       requested: constraints.audio,
       applied: t.getSettings(),
       label: t.label,
+      // Каким путём нашли устройство. Если не по deviceId — значит Chrome его
+      // пересоздал, и настройку стоит пересохранить.
+      deviceResolution: { match: micResolution.match, requestedLabel: stored?.label ?? null },
+      followSystemDefault: followDefault,
       supportedConstraints: navigator.mediaDevices.getSupportedConstraints(),
     };
+
+    // Устройство может отвалиться посреди записи — Bluetooth это делает сам.
+    t.addEventListener('ended', () => handleDeviceLost('local_mic', t.label));
   }
 
   // ── звук вкладки ──
@@ -200,6 +231,50 @@ async function start({ sessionId, streamId, settings }) {
   state.appliedReport = applied;
 
   return { ok: true, appliedReport: applied };
+}
+
+/**
+ * Найти сохранённое устройство среди живых.
+ * Дублирует `resolveDevice` из audio-devices.js намеренно: offscreen-документ
+ * не должен тянуть модуль ради одной функции, а логика тут короткая. Если она
+ * начнёт расходиться — вынести в общий модуль.
+ */
+function resolveStoredDevice(stored, devices) {
+  const byId = devices.find((d) => d.deviceId === (stored.deviceId ?? stored));
+  if (byId) return { requested: stored, match: 'deviceId', device: byId };
+  if (stored.label) {
+    const byLabel = devices.find((d) => d.label === stored.label);
+    if (byLabel) return { requested: stored, match: 'label', device: byLabel };
+  }
+  if (stored.groupId) {
+    const byGroup = devices.find((d) => d.groupId === stored.groupId);
+    if (byGroup) return { requested: stored, match: 'groupId', device: byGroup };
+  }
+  return { requested: stored, match: 'not_found', device: null };
+}
+
+/**
+ * Устройство пропало во время записи. Поведение задаёт `source.onDeviceLost`.
+ * Молча продолжать с другого входа — худший вариант: человек узнает об этом
+ * из файла, когда переслушивать уже поздно.
+ */
+function handleDeviceLost(role, label) {
+  const policy = g('source.onDeviceLost', 'pause_and_notify');
+  state.journal.push({
+    event: 'device_lost', role, label, policy,
+    tMs: Math.round(performance.now() - state.startedAt), at: Date.now(),
+  });
+  if (policy === 'stop') {
+    stop().catch(() => {});
+  } else if (policy === 'pause_and_notify') {
+    pause();
+  }
+  report('error', {
+    error: `Устройство «${label}» отключилось во время записи (${role}). `
+         + { pause_and_notify: 'Запись поставлена на паузу.',
+             switch_to_default: 'Продолжаем с устройством по умолчанию — в файле будет стык.',
+             stop: 'Запись остановлена.' }[policy],
+  });
 }
 
 /** Сведение источников в один поток для compatibility-ассета. */

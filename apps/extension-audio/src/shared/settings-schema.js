@@ -118,8 +118,52 @@ export const SETTINGS = [
     key: 'source.micDeviceId', group: 'source', type: 'device', stage: 'mvp',
     label: 'Устройство микрофона',
     default: 'default',
-    why: 'Явный выбор устройства + фиксация его в манифесте: иначе нельзя воспроизвести замер.',
+    why: 'Zoom и Meet дают выбирать микрофон, и здесь он нужен тем более: расширение должно писать '
+       + 'ТОТ ЖЕ микрофон, который слышат участники встречи. Если встреча идёт через гарнитуру, '
+       + 'а мы пишем микрофон ноутбука, запись не совпадёт с тем, что происходило.',
+    risk: 'На этой машине 13 активных входов, и три их класса ломают запись незаметно: петлевые '
+        + '(«Стерео микшер», «Voicemeeter Out …») затянут в local_mic удалённых участников; '
+        + 'Bluetooth Hands-Free даст моно 8 кГц; устройства с собственной обработкой (NVIDIA '
+        + 'Broadcast, Voicemeeter) дадут двойное шумоподавление. Список рядом помечает каждое.',
+    decides: 'ADR-003',
+    readback: 'track.getSettings().deviceId + label',
+  },
+  {
+    key: 'source.micFollowSystemDefault', group: 'source', type: 'bool', stage: 'experiment',
+    label: 'Следовать за системным устройством по умолчанию',
+    default: true,
+    why: 'Chrome отдаёт особое устройство `default`, которое следует за выбором в ОС. '
+       + 'Явно выбранное устройство за ним НЕ следует: переключив гарнитуру в Windows посреди '
+       + 'встречи, пользователь продолжит писать старую.',
+    risk: 'Обратная сторона: при `default` невозможно гарантировать, ЧТО именно записано. '
+        + 'Для воспроизводимого замера нужно явное устройство.',
+    decides: 'ADR-003',
     readback: 'track.getSettings().deviceId',
+  },
+  {
+    key: 'source.monitorOutputDeviceId', group: 'source', type: 'device-out', stage: 'experiment',
+    label: 'Куда возвращать звук вкладки',
+    default: 'default',
+    why: 'Zoom и Meet дают выбирать не только микрофон, но и динамики. Захват вкладки забирает '
+       + 'звук, и вернуть его надо туда, где человек слушает. Реализуется через '
+       + 'AudioContext.setSinkId().',
+    requires: { key: 'source.tabAudioPassthrough', equals: true },
+    readback: 'audioContext.sinkId',
+  },
+  {
+    key: 'source.onDeviceLost', group: 'source', type: 'enum', stage: 'experiment',
+    label: 'Если устройство пропало во время записи',
+    default: 'pause_and_notify',
+    options: [
+      { value: 'pause_and_notify', label: 'Поставить на паузу и сообщить' },
+      { value: 'switch_to_default', label: 'Переключиться на устройство по умолчанию',
+        risk: 'Продолжит запись с другого микрофона; в файле будет стык без предупреждения.' },
+      { value: 'stop', label: 'Остановить запись' },
+    ],
+    why: 'Bluetooth-гарнитуры отваливаются и переподключаются сами по себе. Молча продолжать '
+       + 'запись с другого устройства — худший вариант: пользователь узнает об этом из файла.',
+    decides: 'ADR-003',
+    readback: null,
   },
 
   // ────────────────────────────────────────────── ОБРАБОТКА МИКРОФОНА ──

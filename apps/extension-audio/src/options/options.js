@@ -12,10 +12,13 @@ import {
   loadSettings, saveSettings, resetSettings, applyPreset,
   listProfiles, saveProfile, deleteProfile, exportProfile, importProfile,
 } from '../shared/settings-store.js';
+import {
+  listAudioDevices, requestPermission, resolveDevice, configWarnings, DEVICE_CLASS,
+} from '../shared/audio-devices.js';
 
 let values = null;
 let stageFilter = 'all';
-let audioDevices = [];
+let audioDevices = { inputs: [], outputs: [], hasLabels: false };
 
 const $ = (id) => document.getElementById(id);
 
@@ -25,12 +28,15 @@ async function init() {
   values = await loadSettings();
   $('schemaVer').textContent = SETTINGS_SCHEMA_VERSION;
 
-  // Список устройств доступен по-настоящему только после выданного доступа к
-  // микрофону. Показываем что есть и не притворяемся, что знаем больше.
-  try {
-    audioDevices = (await navigator.mediaDevices.enumerateDevices())
-      .filter((d) => d.kind === 'audioinput');
-  } catch { audioDevices = []; }
+  await refreshDevices();
+  // Устройства появляются и исчезают сами: Bluetooth-гарнитуры переподключаются,
+  // Voicemeeter поднимает и убирает виртуальные входы. Не отслеживать это —
+  // значит однажды писать не с того входа и не знать об этом.
+  navigator.mediaDevices.addEventListener('devicechange', async () => {
+    await refreshDevices();
+    renderForm(); refreshDerived();
+    flash('Список аудиоустройств изменился — обновлён.', 'warn');
+  });
 
   renderPresets();
   renderNav();
@@ -50,6 +56,11 @@ async function init() {
   $('exportProfile').addEventListener('click', onExportProfile);
   $('importProfile').addEventListener('click', () => $('importFile').click());
   $('importFile').addEventListener('change', onImportFile);
+}
+
+async function refreshDevices() {
+  try { audioDevices = await listAudioDevices(); }
+  catch { audioDevices = { inputs: [], outputs: [], hasLabels: false }; }
 }
 
 // ─────────────────────────────────────────────────────── рендер ──
@@ -183,21 +194,95 @@ function buildInput(s) {
     return box;
   }
 
-  if (s.type === 'device') {
+  if (s.type === 'device' || s.type === 'device-out') {
+    const isOut = s.type === 'device-out';
+    const list = isOut ? audioDevices.outputs : audioDevices.inputs;
+    const box = document.createElement('div');
+    box.style.display = 'flex'; box.style.flexDirection = 'column'; box.style.gap = '6px';
+
+    // Без выданного доступа Chrome возвращает пустые label. Классифицировать
+    // нечего, и делать вид, что список полный, нельзя.
+    if (!audioDevices.hasLabels) {
+      const btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'btn tiny';
+      btn.textContent = 'Показать названия устройств (запросить доступ к микрофону)';
+      btn.addEventListener('click', async () => {
+        try { await requestPermission(); await refreshDevices(); renderForm(); refreshDerived(); }
+        catch (e) { flash('Доступ не выдан: ' + e.message, 'error'); }
+      });
+      box.appendChild(btn);
+      const note = document.createElement('span');
+      note.className = 'opt-hint';
+      note.textContent = 'Найдено устройств: ' + list.length
+        + ', но названия Chrome скрывает до выдачи доступа.';
+      box.appendChild(note);
+      return box;
+    }
+
     const el = document.createElement('select');
     el.id = id;
     const def = document.createElement('option');
-    def.value = 'default'; def.textContent = 'По умолчанию (системное)';
+    def.value = 'default';
+    def.textContent = isOut ? 'По умолчанию (системные динамики)' : 'По умолчанию (следует за ОС)';
     el.appendChild(def);
-    for (const d of audioDevices) {
-      const o = document.createElement('option');
-      o.value = d.deviceId;
-      o.textContent = d.label || `Устройство ${d.deviceId.slice(0, 8)}… (название скрыто до выдачи доступа)`;
-      if (d.deviceId === cur) o.selected = true;
-      el.appendChild(o);
+
+    const curId = (cur && typeof cur === 'object') ? cur.deviceId : cur;
+
+    // Группируем по классу: физические сверху, ловушки — внизу и подписаны,
+    // чтобы «Стерео микшер» не стоял в списке наравне с гарнитурой.
+    const order = [DEVICE_CLASS.PHYSICAL, DEVICE_CLASS.VIRTUAL_PROCESSED,
+                   DEVICE_CLASS.VIRTUAL_OTHER, DEVICE_CLASS.BT_HANDSFREE, DEVICE_CLASS.LOOPBACK];
+
+    if (isOut) {
+      for (const d of list) {
+        const o = document.createElement('option');
+        o.value = d.deviceId; o.textContent = d.label;
+        if (d.deviceId === curId) o.selected = true;
+        el.appendChild(o);
+      }
+    } else {
+      for (const cls of order) {
+        const arr = list.filter((d) => d.cls === cls && !d.isDefault);
+        if (!arr.length) continue;
+        const grp = document.createElement('optgroup');
+        grp.label = labelForClass(cls);
+        for (const d of arr) {
+          const o = document.createElement('option');
+          o.value = d.deviceId;
+          o.textContent = d.label + (d.pairedOutput ? '  ⇄ есть парный выход' : '');
+          if (d.deviceId === curId) o.selected = true;
+          grp.appendChild(o);
+        }
+        el.appendChild(grp);
+      }
     }
-    el.addEventListener('change', () => onChange(s.key, el.value));
-    return el;
+
+    el.addEventListener('change', () => {
+      const d = list.find((x) => x.deviceId === el.value);
+      // Сохраняем не только id: он засолен по origin и меняется при очистке
+      // данных сайта. Метка и groupId позволяют найти устройство снова.
+      onChange(s.key, (el.value === 'default' || !d) ? 'default'
+        : { deviceId: d.deviceId, label: d.label, groupId: d.groupId });
+    });
+    box.appendChild(el);
+
+    if (!isOut) {
+      const chosen = list.find((d) => d.deviceId === curId);
+      if (chosen && chosen.warning) {
+        const w = document.createElement('span');
+        w.className = 'opt-hint';
+        w.style.color = chosen.cls === DEVICE_CLASS.LOOPBACK ? '#ff9aa2' : '#ffd9a0';
+        w.textContent = '⚠ ' + chosen.clsLabel + ': ' + chosen.warning;
+        box.appendChild(w);
+      }
+      const stat = document.createElement('span');
+      stat.className = 'opt-hint';
+      stat.textContent = 'Всего входов: ' + list.length + '. '
+        + order.map((c) => labelForClass(c) + ' — ' + list.filter((d) => d.cls === c).length)
+               .join('; ') + '.';
+      box.appendChild(stat);
+    }
+    return box;
   }
 
   if (s.type === 'int' || s.type === 'float') {
@@ -244,7 +329,30 @@ function onChange(key, value) {
 function refreshDerived() {
   // Сначала правила схемы, затем реальный опрос браузера. Второе важнее:
   // схема может считать комбинацию разумной, а MediaRecorder — не поддерживать её.
-  const issues = [...validate(values), ...checkRuntimeSupport(values)];
+  const curMic = getByPath(values, 'source.micDeviceId');
+  const resolved = resolveDevice(curMic, audioDevices.inputs);
+  const issues = [
+    ...validate(values),
+    ...checkRuntimeSupport(values),
+    ...configWarnings({
+      micDevice: resolved.device,
+      sourceMode: getByPath(values, 'source.mode'),
+      ecEnabled: getByPath(values, 'audioProc.echoCancellation') && !getByPath(values, 'audioProc.rawMode'),
+      nsEnabled: getByPath(values, 'audioProc.noiseSuppression') && !getByPath(values, 'audioProc.rawMode'),
+      agcEnabled: getByPath(values, 'audioProc.autoGainControl') && !getByPath(values, 'audioProc.rawMode'),
+    }).map((w) => ({ ...w, key: 'source.micDeviceId' })),
+  ];
+  // Сохранённое устройство могло исчезнуть — Bluetooth отключился, Voicemeeter
+  // выгрузился. Молчать нельзя: запись пойдёт не с того входа.
+  if (curMic && curMic !== 'default' && resolved.match === 'not_found') {
+    issues.push({ level: 'error', key: 'source.micDeviceId',
+      text: 'Выбранное устройство «' + (curMic.label || curMic) + '» сейчас недоступно.' });
+  } else if (resolved.match === 'label' || resolved.match === 'groupId') {
+    issues.push({ level: 'info', key: 'source.micDeviceId',
+      text: 'Устройство найдено по '
+        + (resolved.match === 'label' ? 'названию' : 'группе')
+        + ', а не по идентификатору — Chrome его пересоздал. Сохраните настройки, чтобы закрепить.' });
+  }
   const box = $('issues');
   box.innerHTML = '';
   box.hidden = issues.length === 0;
@@ -288,7 +396,30 @@ function refreshDerived() {
 async function onSave() {
   // Обе проверки, а не только схемная: иначе можно сохранить конфигурацию,
   // которую этот браузер не поддерживает, и узнать об этом при старте записи.
-  const issues = [...validate(values), ...checkRuntimeSupport(values)];
+  const curMic = getByPath(values, 'source.micDeviceId');
+  const resolved = resolveDevice(curMic, audioDevices.inputs);
+  const issues = [
+    ...validate(values),
+    ...checkRuntimeSupport(values),
+    ...configWarnings({
+      micDevice: resolved.device,
+      sourceMode: getByPath(values, 'source.mode'),
+      ecEnabled: getByPath(values, 'audioProc.echoCancellation') && !getByPath(values, 'audioProc.rawMode'),
+      nsEnabled: getByPath(values, 'audioProc.noiseSuppression') && !getByPath(values, 'audioProc.rawMode'),
+      agcEnabled: getByPath(values, 'audioProc.autoGainControl') && !getByPath(values, 'audioProc.rawMode'),
+    }).map((w) => ({ ...w, key: 'source.micDeviceId' })),
+  ];
+  // Сохранённое устройство могло исчезнуть — Bluetooth отключился, Voicemeeter
+  // выгрузился. Молчать нельзя: запись пойдёт не с того входа.
+  if (curMic && curMic !== 'default' && resolved.match === 'not_found') {
+    issues.push({ level: 'error', key: 'source.micDeviceId',
+      text: 'Выбранное устройство «' + (curMic.label || curMic) + '» сейчас недоступно.' });
+  } else if (resolved.match === 'label' || resolved.match === 'groupId') {
+    issues.push({ level: 'info', key: 'source.micDeviceId',
+      text: 'Устройство найдено по '
+        + (resolved.match === 'label' ? 'названию' : 'группе')
+        + ', а не по идентификатору — Chrome его пересоздал. Сохраните настройки, чтобы закрепить.' });
+  }
   const errors = issues.filter((i) => i.level === 'error');
   if (errors.length) {
     flash(`Не сохранено: ${errors.length} конфликт(ов) нужно устранить.`, 'error');
@@ -391,3 +522,13 @@ function escapeHtml(s) {
 }
 
 function cssId(key) { return key.replace(/\./g, '-'); }
+
+function labelForClass(c) {
+  return {
+    [DEVICE_CLASS.PHYSICAL]: 'Физические',
+    [DEVICE_CLASS.VIRTUAL_PROCESSED]: 'Виртуальные с обработкой',
+    [DEVICE_CLASS.VIRTUAL_OTHER]: 'Виртуальные',
+    [DEVICE_CLASS.BT_HANDSFREE]: 'Bluetooth Hands-Free (моно 8-16 кГц)',
+    [DEVICE_CLASS.LOOPBACK]: 'Петля системного звука — запишет и удалённых',
+  }[c] || c;
+}
