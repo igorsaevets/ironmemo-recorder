@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Разрешение микрофона — IronMemo</title>
+  <style>
+    :root {
+      --bg: #0f1218; --card: #1a1f2b; --text: #e6ebf5; --muted: #9aa3b5;
+      --ok: #4ade80; --err: #ef5f6b; --warn: #f0a238; --link: #6c8fff;
+    }
+    * { box-sizing: border-box }
+    body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg);
+      color: var(--text); margin: 0; padding: 32px; max-width: 720px; margin-inline: auto;
+      line-height: 1.5; }
+    h1 { font-size: 22px; margin: 0 0 16px; }
+    p { color: var(--text); }
+    .card { background: var(--card); border-radius: 12px; padding: 24px; margin: 16px 0; }
+    .muted { color: var(--muted); font-size: 13px; }
+    button { background: var(--link); color: white; border: 0; border-radius: 8px;
+      padding: 12px 20px; font-size: 15px; cursor: pointer; }
+    button:hover { filter: brightness(1.1) }
+    button.ghost { background: transparent; border: 1px solid #33405c; color: var(--text); }
+    .status { padding: 12px 16px; border-radius: 8px; margin: 12px 0; font-size: 14px; }
+    .status.ok { background: rgba(74, 222, 128, 0.15); color: var(--ok); }
+    .status.err { background: rgba(239, 95, 107, 0.15); color: var(--err); }
+    .status.warn { background: rgba(240, 162, 56, 0.15); color: var(--warn); }
+    code { background: #0b0e14; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    ol { padding-left: 20px; }
+    ol li { margin: 6px 0; }
+  </style>
+</head>
+<body>
+  <h1>Разрешите доступ к микрофону</h1>
+
+  <div class="card">
+    <p>IronMemo Recorder записывает звук через встроенное невидимое окно расширения (offscreen document).
+    Chrome не показывает диалог разрешения микрофона напрямую в невидимом окне — поэтому нужна
+    эта видимая страница. <b>Это делается один раз.</b></p>
+    <p>После нажатия кнопки Chrome покажет стандартный запрос — разрешите, и запись будет работать
+    во всех сессиях без повторного вопроса.</p>
+
+    <div id="status" class="status muted">Готов запросить разрешение.</div>
+
+    <div style="display:flex; gap:12px; margin-top:16px;">
+      <button id="grant">Разрешить микрофон</button>
+      <button id="close" class="ghost" hidden>Закрыть вкладку</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <p class="muted"><b>Что делать, если ошибка вернулась после «Разрешить»:</b></p>
+    <ol class="muted">
+      <li>Откройте <code>chrome://extensions</code></li>
+      <li>У IronMemo нажмите <b>Подробнее</b> → <b>Настройки сайта</b></li>
+      <li>Раздел <b>Микрофон</b> — переключите на <b>Разрешить</b></li>
+      <li>Вернитесь сюда и нажмите «Разрешить микрофон» ещё раз</li>
+    </ol>
+    <p class="muted">Chrome иногда «съедает» первый запрос без диалога — известное поведение MV3.
+    Ручное разрешение через настройки сайта — надёжный резерв.</p>
+  </div>
+
+  <script type="module" src="permission.js"></script>
+</body>
+</html>

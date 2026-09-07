@@ -23,6 +23,8 @@ async function init() {
     e.preventDefault();
     chrome.tabs.create({ url: chrome.runtime.getURL('src/lab/lab.html') });
   });
+  $('openPermission').addEventListener('click', () =>
+    chrome.runtime.sendMessage({ target: 'background', type: 'OPEN_PERMISSION' }));
 
   // Состояние живёт в storage, а не в popup: popup закрывается, запись — нет.
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -63,20 +65,22 @@ async function send(type) {
 async function refresh() {
   const s = await state();
   const rec = s.status === 'recording', paused = s.status === 'paused';
+  const awaitingPerm = s.status === 'awaiting_perm';
 
   $('stateDot').className = `dot ${s.status}`;
   $('stateText').textContent = {
     idle: 'Готов к записи', starting: 'Запуск…', recording: 'Идёт запись',
     paused: 'Пауза', error: 'Ошибка',
+    awaiting_perm: 'Ждём разрешение микрофона (см. открытую вкладку)',
   }[s.status] ?? s.status;
 
-  $('start').hidden = rec || paused;
+  $('start').hidden = rec || paused || awaitingPerm;
   $('pause').hidden = !(rec || paused);
   $('stop').hidden  = !(rec || paused);
   $('pause').textContent = paused ? 'Продолжить' : 'Пауза';
   $('start').disabled = $('pause').disabled = $('stop').disabled = false;
 
-  if (s.error) showError(s.error); else $('err').hidden = true;
+  if (s.error) showError(s.error); else { $('err').hidden = true; $('errActions').hidden = true; }
 
   if (s.orphaned) {
     $('orphan').hidden = false;
@@ -105,4 +109,7 @@ async function refresh() {
 function showError(msg) {
   $('err').hidden = false;
   $('err').textContent = msg;
+  // Ошибка связана с микрофоном — предложить открыть страницу разрешения одним кликом.
+  const isMicIssue = /микрофон|Permission|разрешен/i.test(msg);
+  $('errActions').hidden = !isMicIssue;
 }

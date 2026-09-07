@@ -15,10 +15,26 @@
  *
  * Владение потоком: offscreen document. Роль worker'а — получить stream ID по
  * жесту пользователя, передать его вниз и отвечать на вопросы UI.
+ *
+ * Порядок вызовов для tabCapture (важно): сначала ensureOffscreen, потом
+ * chrome.tabCapture.getMediaStreamId. Stream ID живёт «несколько секунд»
+ * (доклад Chrome, обращение 07.09.2026, developer.chrome.com/docs/extensions/
+ * reference/api/tabCapture), поэтому offscreen должен быть готов принять
+ * ID немедленно. Обратный порядок даёт гонку с медленным `chrome.offscreen.
+ * createDocument`.
+ *
+ * Разрешение микрофона (важно): в MV3 offscreen document невидим и не может
+ * показать UA-prompt для микрофона — Chrome отклоняет запрос как
+ * «Permission dismissed». Поэтому первый старт открывает видимую страницу
+ * src/permission/permission.html, где UA-prompt показывается по нажатию
+ * пользователя. Разрешение персистится для origin расширения и живёт до
+ * очистки данных сайта.
  */
 
 const OFFSCREEN_PATH = 'src/offscreen/offscreen.html';
+const PERMISSION_PATH = 'src/permission/permission.html';
 const STATE_KEY = 'ironmemo.captureState.v1';
+const MIC_PERMISSION_KEY = 'ironmemo.micPermissionGranted';
 
 // ─────────────────────────────────────────────────── состояние ──
 
@@ -36,14 +52,50 @@ async function setState(patch) {
 
 async function updateBadge(state) {
   const map = {
-    recording: { text: 'REC', color: '#ef5f6b' },
-    paused:    { text: '||',  color: '#f0a238' },
-    starting:  { text: '…',   color: '#4f7cff' },
-    error:     { text: '!',   color: '#ef5f6b' },
+    recording:      { text: 'REC', color: '#ef5f6b' },
+    paused:         { text: '||',  color: '#f0a238' },
+    starting:       { text: '…',   color: '#4f7cff' },
+    awaiting_perm:  { text: '?',   color: '#f0a238' },
+    error:          { text: '!',   color: '#ef5f6b' },
   };
   const b = map[state.status];
   await chrome.action.setBadgeText({ text: b?.text ?? '' });
   if (b) await chrome.action.setBadgeBackgroundColor({ color: b.color });
+}
+
+// ────────────────────────────────────────────── разрешение микрофона ──
+
+async function getMicPermission() {
+  const r = await chrome.storage.local.get(MIC_PERMISSION_KEY);
+  return r[MIC_PERMISSION_KEY] ?? { granted: false };
+}
+
+/**
+ * Открыть видимую страницу запроса разрешения. Возвращает промис, который
+ * резолвится, когда permission.js пришлёт результат в MIC_PERMISSION_RESULT,
+ * или отклоняется по таймауту.
+ */
+function requestMicPermissionInteractively() {
+  return new Promise(async (resolve, reject) => {
+    const url = chrome.runtime.getURL(PERMISSION_PATH);
+    const tab = await chrome.tabs.create({ url, active: true });
+
+    const timeoutMs = 5 * 60 * 1000; // 5 минут — пользователю может потребоваться время
+    const timer = setTimeout(() => {
+      chrome.runtime.onMessage.removeListener(listener);
+      reject(new Error('Пользователь не ответил в разумное время — старт отменён.'));
+    }, timeoutMs);
+
+    const listener = (msg, sender) => {
+      if (msg?.target === 'background' && msg?.type === 'MIC_PERMISSION_RESULT') {
+        clearTimeout(timer);
+        chrome.runtime.onMessage.removeListener(listener);
+        if (msg.granted) resolve({ granted: true, tabId: tab.id });
+        else reject(new Error(msg.error || 'Разрешение не выдано.'));
+      }
+    };
+    chrome.runtime.onMessage.addListener(listener);
+  });
 }
 
 // ──────────────────────────────────────── offscreen document ──
@@ -79,11 +131,32 @@ async function startCapture({ tabId } = {}) {
   try {
     const settings = (await chrome.storage.local.get('ironmemo.settings.v1'))['ironmemo.settings.v1'] ?? {};
     const mode = settings?.source?.mode ?? 'mic';
+    const needsMic = mode === 'mic' || mode === 'mic+tab';
+    const needsTab = mode === 'tab' || mode === 'mic+tab';
 
+    // ── 1. Разрешение микрофона, если нужно ──
+    //
+    // Не пытаемся дать offscreen шанс попросить самому: он невидим, и Chrome
+    // молча отклонит с "Permission dismissed". Видимая страница — единственный
+    // способ увидеть UA-prompt.
+    if (needsMic) {
+      const perm = await getMicPermission();
+      if (!perm.granted) {
+        await setState({ status: 'awaiting_perm', error: null });
+        await requestMicPermissionInteractively();
+        // Дошли сюда — значит granted; повторный старт не нужен, продолжаем.
+      }
+    }
+
+    // ── 2. Offscreen СНАЧАЛА, tabCapture ID ПОТОМ ──
+    //
+    // Stream ID из tabCapture живёт несколько секунд. Если offscreen ещё не
+    // создан, ID устареет пока chrome.offscreen.createDocument доедет до конца.
+    await ensureOffscreen();
+
+    // ── 3. Захват звука вкладки (если нужен) — под user gesture ──
     let streamId = null;
-    if (mode === 'tab' || mode === 'mic+tab') {
-      // getMediaStreamId ТРЕБУЕТ жеста пользователя. Вызывается здесь, потому что
-      // popup может закрыться в любой момент, а offscreen не имеет права его дать.
+    if (needsTab) {
       const tab = tabId
         ? await chrome.tabs.get(tabId)
         : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
@@ -94,9 +167,8 @@ async function startCapture({ tabId } = {}) {
       streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
     }
 
-    await ensureOffscreen();
+    // ── 4. START в offscreen — сразу, пока streamId ещё жив ──
     const sessionId = crypto.randomUUID();
-
     const res = await chrome.runtime.sendMessage({
       target: 'offscreen', type: 'START', sessionId, streamId, settings,
     });
@@ -107,11 +179,34 @@ async function startCapture({ tabId } = {}) {
       appliedReport: res.appliedReport ?? null,
     });
   } catch (e) {
-    const msg = String(e?.message ?? e);
-    await setState({ status: 'error', error: msg });
+    const raw = String(e?.message ?? e);
+    // Раскрываем известные ошибки в понятный человеку текст. Оригинал — в поле errorRaw.
+    const msg = translateError(raw);
+    await setState({ status: 'error', error: msg, errorRaw: raw });
     await closeOffscreenIfIdle();
     throw e;
   }
+}
+
+function translateError(raw) {
+  if (/Permission dismissed/i.test(raw)) {
+    return 'Chrome не показал диалог разрешения микрофона (известное поведение MV3). '
+         + 'Откройте настройки расширения — там есть кнопка «Показать названия устройств», '
+         + 'она откроет страницу разрешения. Либо: chrome://extensions → Подробнее → '
+         + 'Настройки сайта → Микрофон → Разрешить.';
+  }
+  if (/NotAllowedError/i.test(raw)) {
+    return 'Микрофон не разрешён. Откройте страницу разрешения или chrome://extensions → '
+         + 'Настройки сайта → Микрофон.';
+  }
+  if (/NotFoundError/i.test(raw)) {
+    return 'Не найден выбранный микрофон. Проверьте, что устройство подключено, '
+         + 'и обновите список в настройках.';
+  }
+  if (/streamId/i.test(raw) || /stream.*expired/i.test(raw)) {
+    return 'Идентификатор захвата вкладки истёк. Попробуйте ещё раз.';
+  }
+  return raw;
 }
 
 async function stopCapture() {
@@ -135,6 +230,16 @@ async function resumeCapture() {
   return setState({ status: 'recording' });
 }
 
+async function checkMicPermission() {
+  return getMicPermission();
+}
+
+async function openPermissionPage() {
+  const url = chrome.runtime.getURL(PERMISSION_PATH);
+  await chrome.tabs.create({ url, active: true });
+  return { ok: true };
+}
+
 // ─────────────────────────────────────────── маршрутизация ──
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -143,13 +248,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
     try {
       switch (msg.type) {
-        case 'GET_STATE':  return sendResponse({ ok: true, state: await getState() });
-        case 'START':      return sendResponse({ ok: true, state: await startCapture(msg) });
-        case 'STOP':       return sendResponse({ ok: true, state: await stopCapture() });
-        case 'PAUSE':      return sendResponse({ ok: true, state: await pauseCapture() });
-        case 'RESUME':     return sendResponse({ ok: true, state: await resumeCapture() });
+        case 'GET_STATE':          return sendResponse({ ok: true, state: await getState() });
+        case 'START':              return sendResponse({ ok: true, state: await startCapture(msg) });
+        case 'STOP':               return sendResponse({ ok: true, state: await stopCapture() });
+        case 'PAUSE':              return sendResponse({ ok: true, state: await pauseCapture() });
+        case 'RESUME':             return sendResponse({ ok: true, state: await resumeCapture() });
+        case 'GET_MIC_PERMISSION': return sendResponse({ ok: true, permission: await checkMicPermission() });
+        case 'OPEN_PERMISSION':    return sendResponse(await openPermissionPage());
+        case 'MIC_PERMISSION_RESULT': {
+          // Роутится в requestMicPermissionInteractively через собственный listener.
+          // Здесь ничего не делаем, только подтверждаем.
+          return sendResponse({ ok: true });
+        }
         case 'OFFSCREEN_EVENT': {
-          // Отчёты о прогрессе и об ошибках из offscreen-документа.
           if (msg.event === 'error') await setState({ status: 'error', error: msg.error });
           if (msg.event === 'progress') await setState({ progress: msg.progress });
           return sendResponse({ ok: true });
@@ -161,30 +272,26 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
   })();
 
-  return true; // асинхронный ответ
+  return true;
 });
 
 // ─────────────────────────────────────── восстановление после сбоя ──
 
-/**
- * При каждом запуске worker'а проверяем, не осталась ли запись «в воздухе».
- * Такое состояние означает, что процесс умер, не пройдя через stop, — то есть
- * ровно тот случай, ради которого нужен журнал.
- */
 chrome.runtime.onStartup.addListener(checkForOrphanedSession);
 chrome.runtime.onInstalled.addListener(checkForOrphanedSession);
 
 async function checkForOrphanedSession() {
   const s = await getState();
-  if (s.status === 'recording' || s.status === 'paused' || s.status === 'starting') {
-    // Никаких обещаний о восстановлении здесь не даём: сначала надо прочитать
-    // журнал и убедиться, что сегменты действительно декодируются.
+  if (s.status === 'recording' || s.status === 'paused' || s.status === 'starting'
+      || s.status === 'awaiting_perm') {
     await setState({
       status: 'idle',
-      orphaned: { sessionId: s.sessionId, startedAt: s.startedAt, detectedAt: Date.now() },
+      orphaned: s.sessionId ? { sessionId: s.sessionId, startedAt: s.startedAt, detectedAt: Date.now() } : null,
       error: null,
     });
-    await chrome.action.setBadgeText({ text: '?' });
-    await chrome.action.setBadgeBackgroundColor({ color: '#f0a238' });
+    if (s.sessionId) {
+      await chrome.action.setBadgeText({ text: '?' });
+      await chrome.action.setBadgeBackgroundColor({ color: '#f0a238' });
+    }
   }
 }

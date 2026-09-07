@@ -118,10 +118,32 @@ export async function hasDeviceLabels() {
   } catch { return false; }
 }
 
+/**
+ * Ask for microphone permission from a VISIBLE extension page (options).
+ * Persists the result under `ironmemo.micPermissionGranted` so the service
+ * worker knows it no longer needs to open the standalone permission page.
+ */
 export async function requestPermission() {
-  const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-  s.getTracks().forEach((t) => t.stop());
-  return true;
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    s.getTracks().forEach((t) => t.stop());
+    try {
+      await chrome.storage.local.set({
+        'ironmemo.micPermissionGranted': { granted: true, at: Date.now() },
+      });
+    } catch { /* not in extension context — running from a plain page */ }
+    return true;
+  } catch (e) {
+    try {
+      await chrome.storage.local.set({
+        'ironmemo.micPermissionGranted': {
+          granted: false, at: Date.now(),
+          error: `${e?.name ?? 'Error'}: ${e?.message ?? String(e)}`,
+        },
+      });
+    } catch { /* same as above */ }
+    throw e;
+  }
 }
 
 export async function listAudioDevices() {
