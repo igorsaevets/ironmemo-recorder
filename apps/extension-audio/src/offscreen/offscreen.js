@@ -760,6 +760,8 @@ function requestedVsApplied(final) {
     'source.produceMix': { applied: a.roles ? a.roles.includes('compatibility_mix') : null },
     'source.mixLayout': { applied: a.mix ? (a.mix.channelCount === 2 ? 'stereo_split' : 'mono_sum') : null, note: a.mix ? `dest.channelCount=${a.mix.channelCount}` : 'микс не создавался' },
     'source.tabAudioPassthrough': { applied: a.sources?.remote_tab ? !!a.passthroughConnected : null, note: a.sources?.remote_tab ? null : 'вкладка не захватывалась' },
+    'source.tabDownmixToMono': { applied: a.sources?.remote_tab ? (rs.remote_tab?.downmixedToMono ?? state.roleApplied.remote_tab?.input?.downmixedToMono ?? null) : null,
+      note: a.sources?.remote_tab ? `вход вкладки: ${rs.remote_tab?.inputChannels ?? state.roleApplied.remote_tab?.input?.channels ?? '—'} кан., энкодер: ${rs.remote_tab?.channels ?? '—'} кан.` : 'вкладка не захватывалась' },
     'source.micDeviceId': { applied: micApplied ? { deviceId: micApplied.deviceId, label: mic.label, match: mic.deviceResolution?.match } : null },
     'source.micFollowSystemDefault': { applied: micApplied ? micApplied.deviceId === 'default' : null },
     'source.monitorOutputDeviceId': { applied: a.audioContext ? (a.audioContext.sinkId === '' || a.audioContext.sinkId == null ? 'default' : a.audioContext.sinkId) : null, note: a.audioContext?.sinkError ?? null },
@@ -787,7 +789,9 @@ function requestedVsApplied(final) {
     'storage.backend': { applied: state.engine === 'webcodecs' ? 'opfs' : (state.opfsDir ? 'opfs' : 'memory'), note: a.opfsError ?? null },
     'storage.segmentStrategy': { applied: state.engine === 'webcodecs' ? 'webcodecs_muxed' : 'continuous', note: 'rolling_finalized — И-2' },
     'storage.timesliceMs': { applied: state.engine === 'mediarecorder' && final ? meanInterval(state.recorders[0]?.chunkIntervalsMs) : null, note: state.engine === 'mediarecorder' ? 'измеренный средний интервал ondataavailable' : 'не применимо к WebCodecs' },
-    'storage.flushIntervalMs': { applied: state.engine === 'webcodecs' && final ? (anyRole?.pageIntervalMs?.mean ?? null) : null, note: state.engine === 'webcodecs' ? `интервалы страниц Ogg: ${JSON.stringify(anyRole?.pageIntervalMs ?? null)}` : 'не применимо к MediaRecorder' },
+    // Median, not mean: a device-loss pause produces one page interval as long as the gap
+    // (measured: one 10 000 ms interval in the `devices` run skewed the mean to 1094 ms).
+    'storage.flushIntervalMs': { applied: state.engine === 'webcodecs' && final ? (anyRole?.pageIntervalMs?.p50 ?? null) : null, note: state.engine === 'webcodecs' ? `интервалы страниц Ogg (p50/p95/max/mean): ${JSON.stringify(anyRole?.pageIntervalMs ?? null)}` : 'не применимо к MediaRecorder' },
     'storage.journalEnabled': { applied: g('storage.journalEnabled', true), note: state.engine === 'webcodecs' ? 'журнал ведёт worker (journal.jsonl)' : `записей: ${state.journal.length}` },
   };
   const out = [];
