@@ -59,6 +59,14 @@
     <section class="card"><h2>Аудио — активная проба</h2><div id="actAudio"></div></section>
     <section class="card"><h2>Видео — WebCodecs и подсказка об аппаратном пути</h2><div id="wcVideo"></div></section>
     <section class="card"><h2>Видео — активная проба (реальное кодирование)</h2><div id="actVideo"></div></section>
+    <section class="card">
+      <h2>Сессии записи в OPFS</h2>
+      <p class="why">Файлы лежат в Origin Private File System расширения. Отсюда их можно скачать
+        и проверить декодированием ЦЕЛИКОМ через WebCodecs AudioDecoder — с подсчётом сэмплов,
+        а не по полю duration. Именно это, а не «файл открывается», считается проверкой.</p>
+      <p><button id="refreshSessions" class="btn">Обновить список</button></p>
+      <div id="sessions"></div>
+    </section>
     <section class="card"><h2>Сырой отчёт</h2><pre id="raw">Проба не запускалась.</pre></section>
   </main>
 

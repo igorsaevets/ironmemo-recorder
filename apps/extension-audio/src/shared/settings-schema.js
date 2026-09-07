@@ -41,7 +41,7 @@
  *   requires    условие показа: {key, equals|notEquals|includes}
  */
 
-export const SETTINGS_SCHEMA_VERSION = '0.1.0';
+export const SETTINGS_SCHEMA_VERSION = '0.2.0';
 
 export const GROUPS = [
   { id: 'source',     title: 'Источники звука',            order: 10 },
@@ -115,6 +115,20 @@ export const SETTINGS = [
     readback: null,
   },
   {
+    key: 'source.tabDownmixToMono', group: 'source', type: 'bool', stage: 'experiment',
+    label: 'Звук вкладки сводить в моно перед кодированием',
+    default: true,
+    why: 'Измерено 07.09.2026: дорожка tabCapture приходит как СТЕРЕО на частоте устройства вывода '
+       + '(на этой машине 96 000 Гц, 2 канала). Речь удалённых участников — моно по содержанию; стерео '
+       + 'удваивает битрейт ассета при том же качестве. Моно-сведение делается в Worker до энкодера, '
+       + 'ресемплинг 96k→48k — внутри AudioEncoder.',
+    risk: 'Выключение даёт стерео-Opus и вдвое больший remote_tab; демо с музыкой/пространственным звуком '
+        + 'могут выиграть.',
+    requires: { key: 'source.mode', notEquals: 'mic' },
+    decides: 'ADR-003',
+    readback: 'encoderApplied.numberOfChannels для remote_tab (capture-report)',
+  },
+  {
     key: 'source.micDeviceId', group: 'source', type: 'device', stage: 'mvp',
     label: 'Устройство микрофона',
     default: 'default',
@@ -164,6 +178,24 @@ export const SETTINGS = [
        + 'запись с другого устройства — худший вариант: пользователь узнает об этом из файла.',
     decides: 'ADR-003',
     readback: null,
+  },
+  {
+    key: 'source.onDeviceReturn', group: 'source', type: 'enum', stage: 'experiment',
+    label: 'Если устройство вернулось (после паузы по потере)',
+    default: 'resume_fill_silence',
+    options: [
+      { value: 'resume_fill_silence', label: 'Продолжить, заполнив пропуск тишиной',
+        hint: 'обе дорожки остаются на одной шкале' },
+      { value: 'resume_no_fill', label: 'Продолжить без заполнения',
+        risk: 'Файл станет короче стены на длину пропуска; дорожки разъедутся на эту величину.' },
+      { value: 'stay_paused', label: 'Остаться на паузе до ручного продолжения' },
+    ],
+    why: 'Bluetooth-гарнитура возвращается через 5–30 с. Что делать с дырой во времени — вопрос '
+       + 'о том, кто держит временную шкалу: файл или журнал. Тишина в файле — самый совместимый '
+       + 'вариант: любой плеер и backend видят непрерывный ассет.',
+    requires: { key: 'source.onDeviceLost', equals: 'pause_and_notify' },
+    decides: 'ADR-003',
+    readback: 'journal: device_returned.silenceFrames',
   },
 
   // ────────────────────────────────────────────── ОБРАБОТКА МИКРОФОНА ──
@@ -265,7 +297,7 @@ export const SETTINGS = [
     default: 'webm',
     options: [
       { value: 'webm', label: 'WebM' },
-      { value: 'ogg',  label: 'Ogg', hint: 'нативный для Opus, лучше переживает обрыв' },
+      { value: 'ogg',  label: 'Ogg', hint: 'нативный для Opus; в MediaRecorder Chrome его НЕТ, на пути WebCodecs пишем сами' },
       { value: 'mp4',  label: 'MP4', risk: 'moov в конце: обрыв = файл нечитаем без ремукса.' },
       { value: 'wav',  label: 'WAV', requires: 'pcm16' },
     ],
@@ -496,7 +528,19 @@ export const SETTINGS = [
     label: 'MediaRecorder timeslice, мс', default: 5000, min: 200, max: 60000, step: 100,
     why: 'Частота выдачи чанков. Мелкий timeslice = больше оверхеда контейнера, но чаще точка сохранения.',
     requires: { key: 'storage.segmentStrategy', notEquals: 'webcodecs_muxed' },
-    readback: null,
+    readback: 'измеренный интервал ondataavailable (capture-report)',
+  },
+  {
+    key: 'storage.flushIntervalMs', group: 'storage', type: 'int', stage: 'experiment',
+    label: 'WebCodecs: интервал сброса страницы Ogg на диск, мс', default: 1000, min: 200, max: 10000, step: 100,
+    why: 'На пути WebCodecs границу durable-записи выбираем мы: раз в N мс накопленные пакеты '
+       + 'становятся страницей Ogg, пишутся через createSyncAccessHandle и flush(). Это и есть '
+       + 'максимальная потеря при аварии на этом пути — не «длина буфера», а это число.',
+    risk: 'Слишком мелко — много страниц (27+ байт заголовка на страницу) и flush() каждые 200 мс; '
+        + 'слишком крупно — больше потеря при аварии.',
+    requires: { key: 'audioEnc.impl', equals: 'webcodecs' },
+    decides: 'ADR-004',
+    readback: 'измеренный интервал страниц (capture-report, journal)',
   },
   {
     key: 'storage.journalEnabled', group: 'storage', type: 'bool', stage: 'mvp',
@@ -718,7 +762,19 @@ export const PRESETS = {
     description: 'Проверяем, где ломается STT при экономии места.',
     values: {
       'audioEnc.codec': 'opus', 'audioEnc.bitrateKbps': 24, 'audioProc.sampleRate': 16000,
-      'audioEnc.opusUseDTX': true, 'audioEnc.impl': 'webcodecs',
+      'audioEnc.opusUseDTX': true, 'audioEnc.impl': 'webcodecs', 'audioEnc.container': 'ogg',
+      'storage.segmentStrategy': 'webcodecs_muxed', 'storage.backend': 'opfs',
+    },
+  },
+  'webcodecs-ogg': {
+    label: 'WebCodecs + Ogg/Opus (И-1)',
+    description: 'Собственный muxer, durable-запись страницами через Worker, журнал с двумя часами. '
+               + 'Конфигурация замеров дрейфа и кандидат для И-2.',
+    values: {
+      'audioEnc.impl': 'webcodecs', 'audioEnc.codec': 'opus', 'audioEnc.container': 'ogg',
+      'audioEnc.bitrateKbps': 48, 'audioEnc.opusApplication': 'voip', 'audioEnc.opusFrameDurationUs': 20000,
+      'storage.segmentStrategy': 'webcodecs_muxed', 'storage.backend': 'opfs', 'storage.flushIntervalMs': 1000,
+      'storage.journalEnabled': true, 'source.keepSeparate': true, 'source.produceMix': true,
     },
   },
   'lossless-reference': {
@@ -795,6 +851,31 @@ export function validate(values) {
   if (g('audioEnc.codec') === 'pcm16' && g('storage.backend') === 'memory') {
     issues.push({ level: 'error', key: 'storage.backend',
       text: 'PCM16 в память: 345 МБ на час на дорожку. Вкладка упадёт.' });
+  }
+  if (g('audioEnc.impl') === 'webcodecs') {
+    if (g('audioEnc.codec') !== 'opus') {
+      issues.push({ level: 'error', key: 'audioEnc.codec',
+        text: 'Путь WebCodecs в этой итерации реализован только для Opus.' });
+    }
+    if (g('audioEnc.container') !== 'ogg') {
+      issues.push({ level: 'error', key: 'audioEnc.container',
+        text: 'Путь WebCodecs пишет только Ogg (свой muxer). Выберите Ogg или движок MediaRecorder.' });
+    }
+    if (g('storage.segmentStrategy') !== 'webcodecs_muxed') {
+      issues.push({ level: 'warn', key: 'storage.segmentStrategy',
+        text: 'Движок WebCodecs всегда пишет непрерывный muxed-файл; выбранная стратегия сегментации к нему не применяется.' });
+    }
+    if (g('storage.backend') !== 'opfs') {
+      issues.push({ level: 'error', key: 'storage.backend',
+        text: 'Путь WebCodecs пишет только в OPFS (durable-запись через createSyncAccessHandle в Worker).' });
+    }
+  } else if (g('storage.segmentStrategy') === 'webcodecs_muxed') {
+    issues.push({ level: 'warn', key: 'storage.segmentStrategy',
+      text: 'Стратегия «WebCodecs + muxer» требует движок WebCodecs (audioEnc.impl).' });
+  }
+  if (g('audioEnc.impl') !== 'webcodecs' && g('audioEnc.container') === 'ogg') {
+    issues.push({ level: 'error', key: 'audioEnc.container',
+      text: 'Ogg через MediaRecorder в Chrome не поддерживается (измерено 07.09.2026). Ogg доступен только на пути WebCodecs.' });
   }
   if (g('audioEnc.opusUseDTX') && g('storage.segmentStrategy') === 'continuous') {
     issues.push({ level: 'warn', key: 'audioEnc.opusUseDTX',
@@ -900,6 +981,47 @@ export function checkRuntimeSupport(values) {
         text: 'H.264 доступен через MediaRecorder, но WebCodecs в Chrome 152 его конфигурацию '
             + 'не принимает. На пути WebCodecs выберите VP9 или AV1.' });
     }
+  }
+  return issues;
+}
+
+/**
+ * Проверка поддержки пути WebCodecs — асинхронная, потому что
+ * AudioEncoder.isConfigSupported возвращает промис. Вызывается страницей
+ * настроек вместе с checkRuntimeSupport(); результат блокирует сохранение
+ * так же, как и синхронные ошибки. Измерено 07.09.2026 в offscreen-документе
+ * CfT 152: все 11 конфигураций Opus поддержаны (feasibility-*.json).
+ */
+export async function checkWebCodecsSupport(values) {
+  const issues = [];
+  if (getByPath(values, 'audioEnc.impl') !== 'webcodecs') return issues;
+  if (typeof AudioEncoder === 'undefined') {
+    issues.push({ level: 'error', key: 'audioEnc.impl', text: 'В этом браузере нет AudioEncoder (WebCodecs).' });
+    return issues;
+  }
+  if (typeof MediaStreamTrackProcessor === 'undefined') {
+    issues.push({ level: 'error', key: 'audioEnc.impl', text: 'В этом браузере нет MediaStreamTrackProcessor — не из чего взять AudioData.' });
+  }
+  const config = {
+    codec: 'opus', sampleRate: getByPath(values, 'audioProc.sampleRate') || 48000,
+    numberOfChannels: getByPath(values, 'audioProc.channelCount') || 1,
+    bitrate: (getByPath(values, 'audioEnc.bitrateKbps') || 48) * 1000,
+    bitrateMode: getByPath(values, 'audioEnc.bitrateMode') || 'variable',
+    opus: {
+      application: getByPath(values, 'audioEnc.opusApplication') || 'voip',
+      complexity: getByPath(values, 'audioEnc.opusComplexity') ?? 9,
+      frameDuration: getByPath(values, 'audioEnc.opusFrameDurationUs') || 20000,
+      usedtx: !!getByPath(values, 'audioEnc.opusUseDTX'),
+      useinbandfec: !!getByPath(values, 'audioEnc.opusUseInbandFEC'),
+    },
+  };
+  try {
+    const r = await AudioEncoder.isConfigSupported(config);
+    if (!r.supported) {
+      issues.push({ level: 'error', key: 'audioEnc.impl', text: `AudioEncoder не принимает конфигурацию ${JSON.stringify(config)}.` });
+    }
+  } catch (e) {
+    issues.push({ level: 'error', key: 'audioEnc.impl', text: `AudioEncoder.isConfigSupported: ${String(e?.message ?? e)}` });
   }
   return issues;
 }

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>IronMemo test tone (tab audio source)</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; background: #101014; color: #e8e8ef; padding: 24px; }
+    .big { font-size: 40px; font-variant-numeric: tabular-nums; margin: 12px 0; }
+    .muted { color: #8b8fa3; }
+    button { font: inherit; padding: 8px 14px; }
+  </style>
+</head>
+<body>
+  <h1>Тестовый сигнал для захвата вкладки</h1>
+  <p class="muted">
+    Эта страница играет речеподобный сигнал через WebAudio, чтобы автотест мог захватить
+    звук вкладки без внешнего сайта. Сигнал: пила 165 Гц с амплитудной модуляцией 4,5 Гц,
+    пауза 2 с каждые 5 с (для проверки DTX). Ничего не записывает.
+  </p>
+  <div class="big" id="clock">—</div>
+  <div class="muted" id="state">не запущено</div>
+  <p><button id="start">Играть</button> <button id="stop">Стоп</button></p>
+  <script type="module" src="tone.js"></script>
+</body>
+</html>

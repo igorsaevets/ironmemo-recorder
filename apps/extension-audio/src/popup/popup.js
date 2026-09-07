@@ -7,10 +7,17 @@ let timerHandle = null;
 init();
 
 async function init() {
+  // Boot probe (B3): the first GET_STATE is what wakes the service worker when the
+  // popup opens. Its round-trip is the cold-start cost the user actually feels
+  // before the Start button even works. Exposed for the test bench.
+  const tBoot = performance.now();
   await renderConfig();
+  const first = await state();
+  window.__ironmemoBoot = { getStateMs: Math.round(performance.now() - tBoot), status: first.status, at: Date.now() };
   await refresh();
 
-  $('start').addEventListener('click', () => send('START'));
+  // clickedAt: точка отсчёта для замера холодного старта (B3) — от клика до 'recording'.
+  $('start').addEventListener('click', () => send('START', { clickedAt: Date.now() }));
   $('pause').addEventListener('click', async () => {
     const s = await state();
     send(s.status === 'paused' ? 'RESUME' : 'PAUSE');
@@ -54,9 +61,9 @@ async function state() {
   return r?.state ?? { status: 'idle' };
 }
 
-async function send(type) {
+async function send(type, extra = {}) {
   $('start').disabled = $('pause').disabled = $('stop').disabled = true;
-  const r = await chrome.runtime.sendMessage({ target: 'background', type })
+  const r = await chrome.runtime.sendMessage({ target: 'background', type, ...extra })
     .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   if (!r?.ok) showError(r?.error ?? 'Неизвестная ошибка');
   await refresh();

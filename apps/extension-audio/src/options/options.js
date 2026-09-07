@@ -6,7 +6,7 @@
 
 import {
   SETTINGS, GROUPS, PRESETS, SETTINGS_SCHEMA_VERSION,
-  getByPath, setByPath, isVisible, validate, estimateMBPerHour, checkRuntimeSupport,
+  getByPath, setByPath, isVisible, validate, estimateMBPerHour, checkRuntimeSupport, checkWebCodecsSupport,
 } from '../shared/settings-schema.js';
 import {
   loadSettings, saveSettings, resetSettings, applyPreset,
@@ -401,6 +401,8 @@ async function onSave() {
   const issues = [
     ...validate(values),
     ...checkRuntimeSupport(values),
+    // Путь WebCodecs проверяется асинхронно (AudioEncoder.isConfigSupported — промис).
+    ...(await checkWebCodecsSupport(values)),
     ...configWarnings({
       micDevice: resolved.device,
       sourceMode: getByPath(values, 'source.mode'),

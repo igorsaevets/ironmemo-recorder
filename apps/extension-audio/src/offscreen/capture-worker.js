@@ -1,0 +1,610 @@
+/**
+ * capture-worker.js — the WebCodecs recording pipeline, one Worker for all roles.
+ *
+ *   MediaStreamTrackProcessor.readable (transferred from the offscreen document)
+ *     → AudioData  →  AudioEncoder (Opus)  →  OggOpusMuxer  →  OPFS sync access handle
+ *
+ * WHY A WORKER (decided before building, as the I1 prompt demanded)
+ * -----------------------------------------------------------------
+ * OPFS `createSyncAccessHandle` exists only in Workers, and it is the only OPFS
+ * write path whose bytes are durable before `close()`: `createWritable()` on the
+ * main thread writes to a swap file that is swapped in on close — a crash before
+ * close loses EVERYTHING written. For a recorder whose whole point is surviving a
+ * crash, that rules the main-thread path out. Measured in this offscreen context
+ * on 2026-09-07 (feasibility-*.json): open 1.4–1.8 ms, write+flush ≈ 500 MB/s.
+ *
+ * The encoder lives here too: AudioEncoder is available in workers (measured),
+ * and keeping decode-time work off the offscreen main thread keeps the
+ * AudioContext passthrough (what the user hears) unaffected by disk stalls.
+ *
+ * TIMELINE AND DRIFT (what every number here means)
+ * -------------------------------------------------
+ * Per role we keep four independent clocks and never mix them up:
+ *   frames     — input samples received, at the track's own sample rate. This IS
+ *                the source device's clock: frames / sampleRate = media time.
+ *   granule    — samples encoded, always in 48 kHz units (Opus/Ogg convention).
+ *   timestamp  — AudioData.timestamp (µs). Chrome derives it from capture time
+ *                (measured: 100 µs jitter on the fake device), so it is a clock
+ *                reading, not a sample count. Gaps between consecutive timestamps
+ *                larger than a frame are DISCONTINUITIES (dropped or inserted
+ *                audio) and are counted, not hidden.
+ *   wall/mono  — Date.now() and performance.now() at first and last frame.
+ *                performance.now() may stop during system sleep; Date.now() does
+ *                not. A checkpoint where the two deltas disagree is a CLOCK_JUMP.
+ * Drift of a source against the wall clock = media time − wall time.
+ * Drift between two sources = difference of their media times at the same
+ * checkpoint instant, minus the same difference at the first checkpoint. The
+ * checkpoint snapshot is taken for all roles in one synchronous step, so the
+ * comparison is between counters read at the same instant (±1 frame = ±10 ms).
+ *
+ * MESSAGES (main → worker): PROBE, OPEN_SESSION, OPEN_ROLE, REOPEN_ROLE,
+ *   CLOSE_ROLE, PAUSE, RESUME, EVENT, WRITE_REPORT, STOP.
+ * MESSAGES (worker → main): PROBE_RESULT, SESSION_OPENED, ROLE_OPENED,
+ *   ROLE_CLOSED, PROGRESS, ERROR, REPORT_WRITTEN, STOPPED.
+ */
+
+import { OggOpusMuxer, parseOpusHead, opusPacketSamples } from '../shared/ogg-opus.js';
+
+const CHECKPOINT_MS = 10_000;     // consistent multi-role snapshot cadence
+const JOURNAL_EVERY_PAGES = 5;    // one journal line per N pages per role
+// Discontinuity = cumulative deviation of AudioData.timestamp from the sample
+// count, re-anchored after each event. Per-frame deltas are NOT used for this:
+// the AudioContext destination track (compatibility_mix) delivers 480-frame
+// chunks whose timestamps advance in 128-frame render quanta, so consecutive
+// deltas jitter by ±2.7 ms without any audio being lost (measured 2026-09-07,
+// smoke-mic/journal.jsonl: 350 "discontinuities" of +2.1…+2.7 ms in 28 s while
+// the cumulative timestamp span matched the frame count within 1.2 ms). The
+// per-frame jitter is still recorded, as jitter.
+const DISCONTINUITY_US = 20_000;  // cumulative |timestamp − expected| that counts as lost/inserted audio
+const CLOCK_JUMP_MS = 1_500;      // wall − mono disagreement that means "slept"
+
+let session = null;
+const roles = new Map();
+
+self.onmessage = (e) => {
+  handle(e.data).catch((err) => {
+    self.postMessage({ type: 'ERROR', error: String(err?.message ?? err), during: e.data?.type });
+  });
+};
+
+async function handle(msg) {
+  switch (msg?.type) {
+    case 'PROBE':         return self.postMessage({ type: 'PROBE_RESULT', result: await probe() });
+    case 'OPEN_SESSION':  return openSession(msg);
+    case 'OPEN_ROLE':     return openRole(msg);
+    case 'OPEN_SYNTH_ROLE': return openSynthRole(msg);
+    case 'REOPEN_ROLE':   return reopenRole(msg);
+    case 'CLOSE_ROLE':    return closeRole(msg.role, msg.reason ?? 'closed');
+    case 'PAUSE':         return setPaused(true, msg);
+    case 'RESUME':        return setPaused(false, msg);
+    case 'EVENT':         return journal({ t: 'event', ...msg.event });
+    case 'WRITE_REPORT':  return writeReport(msg.report, msg.final);
+    case 'STOP':          return stopAll(msg);
+    case 'CLOSE_SESSION': return closeSession();
+    default: throw new Error(`unknown worker message: ${msg?.type}`);
+  }
+}
+
+// ──────────────────────────────────────────────────────────── session ──
+
+async function openSession({ sessionId, t0, opts = {}, settingsSnapshot = null }) {
+  const root = await navigator.storage.getDirectory();
+  const sessions = await root.getDirectoryHandle('sessions', { create: true });
+  const dir = await sessions.getDirectoryHandle(sessionId, { create: true });
+  const jfh = await dir.getFileHandle('journal.jsonl', { create: true });
+  const jh = await jfh.createSyncAccessHandle();
+  session = {
+    id: sessionId, dir, journalHandle: jh, journalSize: jh.getSize(),
+    t0, opts: { flushIntervalMs: 1000, journalEnabled: true, fillGapsWithSilence: true, ...opts },
+    settingsSnapshot,
+    lastCheckpoint: null, checkpoints: 0, clockJumps: [],
+    flushTimer: null, checkpointTimer: null,
+    openedWall: Date.now(), openedMono: performance.now(),
+  };
+  journal({ t: 'session_open', sessionId, t0, opts: session.opts, workerTimeOrigin: performance.timeOrigin });
+  session.flushTimer = setInterval(() => { for (const r of roles.values()) flushRole(r).catch(reportErr(r.role)); },
+                                   session.opts.flushIntervalMs);
+  session.checkpointTimer = setInterval(checkpoint, CHECKPOINT_MS);
+  self.postMessage({ type: 'SESSION_OPENED', ok: true, sessionId });
+}
+
+const reportErr = (role) => (e) => self.postMessage({ type: 'ERROR', role, error: String(e?.message ?? e) });
+
+function journal(entry) {
+  if (!session?.opts.journalEnabled) return;
+  const line = JSON.stringify({ wall: Date.now(), mono: Math.round(performance.now() * 10) / 10, ...entry }) + '\n';
+  const bytes = new TextEncoder().encode(line);
+  try {
+    session.journalHandle.write(bytes, { at: session.journalSize });
+    session.journalSize += bytes.length;
+    session.journalHandle.flush();
+  } catch (e) {
+    self.postMessage({ type: 'ERROR', error: `journal: ${String(e?.message ?? e)}` });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────── roles ──
+
+async function openRole({ role, readable, encoder, expected = {}, muxer = {}, downmix = false }) {
+  if (!session) throw new Error('OPEN_ROLE before OPEN_SESSION');
+  if (roles.has(role)) throw new Error(`role ${role} already open`);
+  const fh = await session.dir.getFileHandle(`${role}.opus`, { create: true });
+  const handle = await fh.createSyncAccessHandle();
+  const r = {
+    role, readable, reader: null, encoder: null, muxer: null, handle, fileBytes: handle.getSize(),
+    encoderRequest: encoder, encoderApplied: null, encoderSupported: null, expected, downmix,
+    inputChannels: null, downmixed: false,
+    muxerOpts: muxer, opusHead: null, opusHeadSource: null,
+    sampleRate: null, channels: null, format: null,
+    frames: 0, pausedFrames: 0, framesTotal: 0, framesPerChunkSeen: new Set(),
+    firstTs: null, lastTs: null, prevTs: null, prevFrames: 0, lastFrameNumberOfFrames: 0,
+    anchorTs: null, anchorFrames: 0, maxJitterUs: 0,
+    firstWall: null, firstMono: null, lastWall: null, lastMono: null,
+    discontinuities: 0, discontinuityUsSum: 0, maxDiscontinuityUs: 0, firstDiscontinuities: [],
+    packets: 0, encodedBytes: 0, pages: 0, pagesSinceJournal: 0, chunkDurationsSeen: new Set(),
+    firstChunkTs: null, lastChunkTs: null, lastChunkDuration: null,
+    silenceFilled48k: 0, gaps: [], paused: false, closed: false, ended: false, endedReason: null,
+    openedWall: Date.now(), openedMono: performance.now(), opened: null,
+    pageIntervalsMs: [], lastPageMono: null,
+  };
+  roles.set(role, r);
+  journal({ t: 'role_open', role, fileBytesAtOpen: r.fileBytes, expected, encoderRequest: encoder });
+  startReader(r, readable);
+}
+
+/**
+ * Synthetic source: AudioData generated at wall-clock pace at `sampleRate`
+ * (speech-like sawtooth + AM + 2 s pause per 5 s). Every 10 ms tick emits as
+ * many frames as Date.now() says are due, so the frame count tracks the wall
+ * clock exactly and any divergence between granule and frames is the encoder's
+ * resampler, not the generator. Used for the 44.1 kHz case (no such device here).
+ */
+async function openSynthRole({ role, sampleRate, encoder }) {
+  if (!session) throw new Error('OPEN_SYNTH_ROLE before OPEN_SESSION');
+  if (roles.has(role)) throw new Error(`role ${role} already open`);
+  const fh = await session.dir.getFileHandle(`${role}.opus`, { create: true });
+  const handle = await fh.createSyncAccessHandle();
+  const r = {
+    role, readable: null, reader: null, encoder: null, muxer: null, handle, fileBytes: handle.getSize(),
+    encoderRequest: encoder, encoderApplied: null, encoderSupported: null, expected: { sampleRate, synthetic: true }, downmix: false,
+    inputChannels: 1, downmixed: false, muxerOpts: { comments: ['IRONMEMO_SYNTHETIC=1'] }, opusHead: null, opusHeadSource: null,
+    sampleRate: null, channels: null, format: null,
+    frames: 0, pausedFrames: 0, framesTotal: 0, framesPerChunkSeen: new Set(),
+    firstTs: null, lastTs: null, prevTs: null, prevFrames: 0, lastFrameNumberOfFrames: 0,
+    anchorTs: null, anchorFrames: 0, maxJitterUs: 0,
+    firstWall: null, firstMono: null, lastWall: null, lastMono: null,
+    discontinuities: 0, discontinuityUsSum: 0, maxDiscontinuityUs: 0, firstDiscontinuities: [],
+    packets: 0, encodedBytes: 0, pages: 0, pagesSinceJournal: 0, chunkDurationsSeen: new Set(),
+    firstChunkTs: null, lastChunkTs: null, lastChunkDuration: null,
+    silenceFilled48k: 0, gaps: [], paused: false, closed: false, ended: false, endedReason: null,
+    openedWall: Date.now(), openedMono: performance.now(), opened: null,
+    pageIntervalsMs: [], lastPageMono: null, synthetic: true,
+  };
+  roles.set(role, r);
+  journal({ t: 'role_open', role, synthetic: true, sampleRate, encoderRequest: encoder });
+  const t0 = Date.now();
+  let generated = 0;
+  const tick = async () => {
+    if (r.closed) return;
+    const due = Math.floor((Date.now() - t0) / 1000 * sampleRate);
+    const n = due - generated;
+    if (n <= 0) return;
+    const buf = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const tSec = (generated + i) / sampleRate;
+      const on = (tSec % 5) < 3;
+      buf[i] = on ? 0.25 * (2 * ((165 * tSec) % 1) - 1) * (0.65 + 0.35 * Math.sin(2 * Math.PI * 4.5 * tSec)) : 0;
+    }
+    const ad = new AudioData({ format: 'f32-planar', sampleRate, numberOfFrames: n, numberOfChannels: 1,
+                               timestamp: Math.round(generated / sampleRate * 1e6), data: buf });
+    generated += n;
+    await onAudioData(r, ad);
+  };
+  r.synthTimer = setInterval(() => { tick().catch(reportErr(role)); }, 10);
+  r.reader = { cancel: async () => { clearInterval(r.synthTimer); r.ended = true; r.endedReason = 'synth_stopped'; } };
+}
+
+/** Device returned: continue the SAME file. Fill the gap with encoded silence so both assets keep one timeline. */
+async function reopenRole({ role, readable, gapMs = null }) {
+  const r = roles.get(role);
+  if (!r) throw new Error(`REOPEN_ROLE: unknown role ${role}`);
+  if (!r.ended) throw new Error(`REOPEN_ROLE: role ${role} is still reading`);
+  const now = Date.now();
+  const gap = gapMs ?? (r.lastWall ? now - r.lastWall : 0);
+  let filled = 0;
+  if (session.opts.fillGapsWithSilence && r.encoder && r.sampleRate && gap > 0) {
+    filled = feedSilence(r, gap);
+  }
+  r.gaps.push({ atWall: r.lastWall, resumedWall: now, gapMs: gap, silenceFrames: filled });
+  journal({ t: 'role_reopen', role, gapMs: gap, silenceFrames: filled, filled: filled > 0 });
+  r.ended = false; r.endedReason = null;
+  startReader(r, readable);
+  self.postMessage({ type: 'ROLE_REOPENED', role, gapMs: gap, silenceFrames: filled });
+}
+
+function feedSilence(r, gapMs) {
+  const rate = r.sampleRate, ch = r.channels;
+  const total = Math.round(gapMs / 1000 * rate);
+  const step = Math.round(rate / 50); // 20 ms
+  let done = 0;
+  let ts = (r.lastTs ?? 0) + Math.round(r.lastFrameNumberOfFrames / rate * 1e6);
+  while (done < total) {
+    const n = Math.min(step, total - done);
+    const ad = new AudioData({ format: 'f32-planar', sampleRate: rate, numberOfFrames: n, numberOfChannels: ch,
+                               timestamp: ts, data: new Float32Array(n * ch) });
+    r.encoder.encode(ad); ad.close();
+    ts += Math.round(n / rate * 1e6);
+    done += n;
+  }
+  r.silenceFilled48k += Math.round(total * 48000 / rate);
+  r.lastTs = ts; r.lastFrameNumberOfFrames = 0; r.prevTs = null; r.anchorTs = null; // next real frame re-anchors
+  return total;
+}
+
+function startReader(r, readable) {
+  r.reader = readable.getReader();
+  (async () => {
+    try {
+      for (;;) {
+        const { value: ad, done } = await r.reader.read();
+        if (done) break;
+        await onAudioData(r, ad);
+      }
+      r.ended = true; r.endedReason ??= 'stream_done';
+      journal({ t: 'role_stream_done', role: r.role, frames: r.frames });
+    } catch (e) {
+      r.ended = true; r.endedReason = `read_error: ${String(e?.message ?? e)}`;
+      journal({ t: 'role_read_error', role: r.role, error: r.endedReason });
+      self.postMessage({ type: 'ERROR', role: r.role, error: r.endedReason });
+    }
+  })();
+}
+
+async function onAudioData(r, ad) {
+  const wall = Date.now(), mono = performance.now();
+  try {
+    if (r.encoder === null) await configureEncoder(r, ad);
+    if (r.encoder === null) return; // unsupported — reported, frames dropped
+
+    // Per-frame jitter (informational) and cumulative discontinuity (the real signal).
+    if (r.prevTs !== null) {
+      const jitter = ad.timestamp - (r.prevTs + Math.round(r.prevFrames / r.sampleRate * 1e6));
+      if (Math.abs(jitter) > Math.abs(r.maxJitterUs)) r.maxJitterUs = jitter;
+    }
+    if (r.anchorTs === null) { r.anchorTs = ad.timestamp; r.anchorFrames = r.framesTotal; }
+    const expected = r.anchorTs + Math.round((r.framesTotal - r.anchorFrames) / r.sampleRate * 1e6);
+    const dev = ad.timestamp - expected;
+    if (Math.abs(dev) > DISCONTINUITY_US) {
+      r.discontinuities++;
+      r.discontinuityUsSum += dev;
+      if (Math.abs(dev) > Math.abs(r.maxDiscontinuityUs)) r.maxDiscontinuityUs = dev;
+      if (r.firstDiscontinuities.length < 20) r.firstDiscontinuities.push({ atFrame: r.framesTotal, timestamp: ad.timestamp, deltaUs: dev, wall });
+      journal({ t: 'discontinuity', role: r.role, atFrame: r.framesTotal, deltaUs: dev, timestamp: ad.timestamp });
+      r.anchorTs = ad.timestamp; r.anchorFrames = r.framesTotal; // re-anchor after the jump
+    }
+    r.prevTs = ad.timestamp; r.prevFrames = ad.numberOfFrames;
+    r.framesTotal += ad.numberOfFrames;
+    if (r.firstTs === null) { r.firstTs = ad.timestamp; r.firstWall = wall; r.firstMono = mono; }
+    r.lastTs = ad.timestamp; r.lastWall = wall; r.lastMono = mono; r.lastFrameNumberOfFrames = ad.numberOfFrames;
+    r.framesPerChunkSeen.add(ad.numberOfFrames);
+
+    if (r.paused) { r.pausedFrames += ad.numberOfFrames; return; }
+    r.frames += ad.numberOfFrames;
+    if (r.downmixed) {
+      const mono = downmixToMono(ad);
+      try { r.encoder.encode(mono); } finally { mono.close(); }
+    } else {
+      r.encoder.encode(ad);
+    }
+  } finally {
+    ad.close();
+  }
+}
+
+/** Average all channels into one f32-planar AudioData (tab tracks arrive as stereo at the output rate). */
+function downmixToMono(ad) {
+  const n = ad.numberOfFrames, ch = ad.numberOfChannels;
+  const acc = new Float32Array(n);
+  const tmp = new Float32Array(n);
+  for (let c = 0; c < ch; c++) {
+    ad.copyTo(tmp, { planeIndex: c, format: 'f32-planar' });
+    for (let i = 0; i < n; i++) acc[i] += tmp[i];
+  }
+  if (ch > 1) for (let i = 0; i < n; i++) acc[i] /= ch;
+  return new AudioData({ format: 'f32-planar', sampleRate: ad.sampleRate, numberOfFrames: n, numberOfChannels: 1,
+                         timestamp: ad.timestamp, data: acc });
+}
+
+async function configureEncoder(r, ad) {
+  r.sampleRate = ad.sampleRate; r.inputChannels = ad.numberOfChannels; r.format = ad.format;
+  r.downmixed = !!r.downmix && ad.numberOfChannels > 1;
+  r.channels = r.downmixed ? 1 : ad.numberOfChannels;
+  const req = r.encoderRequest ?? {};
+  const config = {
+    codec: 'opus', sampleRate: ad.sampleRate, numberOfChannels: r.channels,
+    bitrate: req.bitrate ?? 48000, bitrateMode: req.bitrateMode ?? 'variable',
+    ...(req.opus ? { opus: req.opus } : {}),
+  };
+  let sup;
+  try { sup = await AudioEncoder.isConfigSupported(config); }
+  catch (e) { sup = { supported: false, error: String(e?.message ?? e) }; }
+  r.encoderSupported = sup.supported;
+  r.encoderApplied = sup.config ?? null;
+  if (!sup.supported) {
+    journal({ t: 'encoder_unsupported', role: r.role, config, error: sup.error ?? null });
+    self.postMessage({ type: 'ROLE_OPENED', role: r.role, ok: false,
+      error: `AudioEncoder does not support ${JSON.stringify(config)}${sup.error ? ': ' + sup.error : ''}` });
+    r.encoder = null;
+    return;
+  }
+  const enc = new AudioEncoder({
+    output: (chunk, meta) => onChunk(r, chunk, meta),
+    error: (e) => {
+      journal({ t: 'encoder_error', role: r.role, error: String(e?.message ?? e) });
+      self.postMessage({ type: 'ERROR', role: r.role, error: `AudioEncoder: ${String(e?.message ?? e)}` });
+    },
+  });
+  enc.configure(config);
+  r.encoder = enc;
+  r.opened = { wall: Date.now(), mono: performance.now() };
+  journal({ t: 'encoder_configured', role: r.role, requested: config, applied: r.encoderApplied,
+            input: { sampleRate: r.sampleRate, channels: r.inputChannels, format: r.format, framesPerChunk: ad.numberOfFrames, downmixedToMono: r.downmixed } });
+  self.postMessage({
+    type: 'ROLE_OPENED', role: r.role, ok: true,
+    applied: { encoderRequested: config, encoderApplied: r.encoderApplied,
+               input: { sampleRate: r.sampleRate, channels: r.inputChannels, format: r.format, framesPerChunk: ad.numberOfFrames, downmixedToMono: r.downmixed },
+               firstFrame: { timestamp: ad.timestamp, wall: Date.now() } },
+  });
+}
+
+function onChunk(r, chunk, meta) {
+  if (r.muxer === null) {
+    let head = null, source = 'constructed';
+    const d = meta?.decoderConfig;
+    if (d?.description) {
+      head = d.description instanceof ArrayBuffer ? new Uint8Array(d.description)
+           : new Uint8Array(d.description.buffer, d.description.byteOffset, d.description.byteLength);
+      head = new Uint8Array(head); // own copy
+      source = 'encoder.decoderConfig.description';
+    }
+    r.opusHead = head ? parseOpusHead(head) : null;
+    r.opusHeadSource = source;
+    r.muxer = new OggOpusMuxer({
+      channels: r.channels, preSkip: r.opusHead?.preSkip ?? 312, inputSampleRate: r.sampleRate,
+      opusHead: head,
+      comments: [
+        `ENCODER=Chrome AudioEncoder (WebCodecs)`,
+        `IRONMEMO_SESSION=${session?.id ?? ''}`, `IRONMEMO_ROLE=${r.role}`,
+        `IRONMEMO_INPUT_RATE=${r.sampleRate}`, ...(r.muxerOpts.comments ?? []),
+      ],
+    });
+    // Header pages go to disk immediately: a crash one second in still leaves a
+    // decodable (empty) file, and the pre-skip is on disk before any audio.
+    for (const p of r.muxer.headerPages()) writeBytes(r, p);
+    journal({ t: 'muxer_start', role: r.role, opusHead: r.opusHead, opusHeadSource: source, fileBytes: r.fileBytes });
+  }
+  const buf = new Uint8Array(chunk.byteLength);
+  chunk.copyTo(buf);
+  const samples48k = opusPacketSamples(buf);
+  r.muxer.addPacket(buf, samples48k);
+  r.packets++; r.encodedBytes += buf.length;
+  r.chunkDurationsSeen.add(chunk.duration ?? null);
+  if (r.firstChunkTs === null) r.firstChunkTs = chunk.timestamp;
+  r.lastChunkTs = chunk.timestamp; r.lastChunkDuration = chunk.duration ?? null;
+}
+
+function writeBytes(r, bytes) {
+  r.handle.write(bytes, { at: r.fileBytes });
+  r.fileBytes += bytes.length;
+  r.handle.flush();
+}
+
+async function flushRole(r, { eos = false } = {}) {
+  if (!r.muxer || r.closed) return;
+  const page = r.muxer.flushPage({ eos });
+  if (!page) return;
+  writeBytes(r, page);
+  r.pages++;
+  const mono = performance.now();
+  if (r.lastPageMono !== null && r.pageIntervalsMs.length < 100000) r.pageIntervalsMs.push(Math.round(mono - r.lastPageMono));
+  r.lastPageMono = mono;
+  if (++r.pagesSinceJournal >= JOURNAL_EVERY_PAGES || eos) {
+    r.pagesSinceJournal = 0;
+    journal({ t: 'page', role: r.role, pages: r.pages, fileBytes: r.fileBytes, granule: r.muxer.granule,
+              frames: r.frames, packets: r.packets, eos });
+  }
+}
+
+function setPaused(paused, msg = {}) {
+  for (const r of roles.values()) {
+    if (r.paused === paused) continue;
+    r.paused = paused;
+    journal({ t: paused ? 'pause' : 'resume', role: r.role, frames: r.frames, pausedFrames: r.pausedFrames, granule: r.muxer?.granule ?? 0 });
+  }
+  self.postMessage({ type: paused ? 'PAUSED' : 'RESUMED' });
+}
+
+async function closeRole(role, reason) {
+  const r = roles.get(role);
+  if (!r || r.closed) return;
+  await finalizeRole(r, reason);
+  self.postMessage({ type: 'ROLE_CLOSED', role, stats: roleStats(r) });
+}
+
+async function finalizeRole(r, reason) {
+  if (r.closed) return;
+  r.closed = true;
+  try { await r.reader?.cancel(); } catch {}
+  if (r.encoder) {
+    try { await r.encoder.flush(); } catch (e) { journal({ t: 'encoder_flush_error', role: r.role, error: String(e?.message ?? e) }); }
+    try { r.encoder.close(); } catch {}
+  }
+  r.closed = false; await flushRole(r, { eos: true }); r.closed = true;
+  try { r.handle.flush(); r.handle.close(); } catch (e) { journal({ t: 'handle_close_error', role: r.role, error: String(e?.message ?? e) }); }
+  journal({ t: 'role_close', role: r.role, reason, ...roleStats(r) });
+}
+
+// ──────────────────────────────────────────────── checkpoints & stats ──
+
+function roleStats(r) {
+  // Media time on the asset's timeline: real frames + silence inserted for device gaps
+  // (the file really contains those samples). Paused frames are added back for the
+  // wall-clock comparison only.
+  const silenceFrames = r.sampleRate ? r.silenceFilled48k * r.sampleRate / 48000 : 0;
+  const mediaSec = r.sampleRate ? (r.frames + silenceFrames) / r.sampleRate : 0;
+  const wallSec = r.firstWall != null && r.lastWall != null ? (r.lastWall - r.firstWall) / 1000 + (r.lastFrameNumberOfFrames / (r.sampleRate || 1)) : null;
+  const tsSec = r.firstTs != null && r.lastTs != null ? (r.lastTs - r.firstTs) / 1e6 + (r.lastFrameNumberOfFrames / (r.sampleRate || 1)) : null;
+  const elapsedSec = r.opened ? (Date.now() - r.opened.wall) / 1000 : null;
+  return {
+    role: r.role, sampleRate: r.sampleRate, channels: r.channels, inputChannels: r.inputChannels, downmixedToMono: r.downmixed, format: r.format,
+    frames: r.frames, pausedFrames: r.pausedFrames, framesPerChunkSeen: [...r.framesPerChunkSeen],
+    mediaSec: round(mediaSec, 4),
+    wallSpanSec: wallSec == null ? null : round(wallSec, 4),
+    timestampSpanSec: tsSec == null ? null : round(tsSec, 4),
+    // media time minus wall time between first and last frame: negative = source
+    // delivered fewer samples than the wall clock implies (dropped audio or slow clock).
+    driftVsWallMs: wallSec == null ? null : round((mediaSec + r.pausedFrames / (r.sampleRate || 1) - wallSec) * 1000, 2),
+    driftVsTimestampMs: tsSec == null ? null : round((r.frames / (r.sampleRate || 1) + r.pausedFrames / (r.sampleRate || 1) - tsSec) * 1000, 2),
+    silenceFrames: Math.round(silenceFrames),
+    firstTs: r.firstTs, lastTs: r.lastTs, firstWall: r.firstWall, lastWall: r.lastWall, firstMono: r.firstMono, lastMono: r.lastMono,
+    discontinuities: r.discontinuities, discontinuityUsSum: r.discontinuityUsSum, maxDiscontinuityUs: r.maxDiscontinuityUs,
+    firstDiscontinuities: r.firstDiscontinuities, maxJitterUs: r.maxJitterUs,
+    packets: r.packets, granule48k: r.muxer?.granule ?? 0, encodedBytes: r.encodedBytes, fileBytes: r.fileBytes, pages: r.pages,
+    effectiveKbps: mediaSec > 0 ? round((r.encodedBytes * 8) / mediaSec / 1000, 2) : null,
+    chunkDurationsSeenUs: [...r.chunkDurationsSeen],
+    firstChunkTs: r.firstChunkTs, lastChunkTs: r.lastChunkTs,
+    granuleSec: r.muxer ? round(r.muxer.granule / 48000, 4) : null,
+    // encoded 48 kHz samples vs input frames converted to 48 kHz: the encoder's
+    // internal resampler (44.1 k → 48 k) must keep these equal within one packet.
+    granuleMinusInput48k: r.muxer && r.sampleRate ? Math.round(r.muxer.granule - r.frames * 48000 / r.sampleRate - r.silenceFilled48k) : null,
+    silenceFilled48k: r.silenceFilled48k, gaps: r.gaps,
+    encoderRequested: r.encoderRequest, encoderApplied: r.encoderApplied, encoderSupported: r.encoderSupported,
+    opusHead: r.opusHead, opusHeadSource: r.opusHeadSource,
+    pageIntervalMs: summarize(r.pageIntervalsMs),
+    paused: r.paused, ended: r.ended, endedReason: r.endedReason, closed: r.closed, elapsedSec: elapsedSec == null ? null : round(elapsedSec, 1),
+  };
+}
+
+function summarize(arr) {
+  if (!arr.length) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  const q = (p) => s[Math.min(s.length - 1, Math.floor(s.length * p))];
+  return { n: s.length, p50: q(0.5), p95: q(0.95), max: s.at(-1), mean: round(s.reduce((a, b) => a + b, 0) / s.length, 1) };
+}
+
+const round = (v, d) => v == null ? null : Math.round(v * 10 ** d) / 10 ** d;
+
+/** One consistent snapshot of every role's counters, taken synchronously. */
+function checkpoint() {
+  if (!session) return;
+  const wall = Date.now(), mono = performance.now();
+  const snap = {};
+  for (const r of roles.values()) {
+    snap[r.role] = { frames: r.frames, pausedFrames: r.pausedFrames, sampleRate: r.sampleRate, granule48k: r.muxer?.granule ?? 0,
+                     silenceFrames: r.sampleRate ? Math.round(r.silenceFilled48k * r.sampleRate / 48000) : 0,
+                     lastTs: r.lastTs, lastWall: r.lastWall, fileBytes: r.fileBytes, packets: r.packets,
+                     discontinuities: r.discontinuities, ended: r.ended, paused: r.paused,
+                     mediaSec: r.sampleRate ? round(r.frames / r.sampleRate, 4) : null };
+  }
+  const cp = { t: 'checkpoint', n: ++session.checkpoints, wall, mono: round(mono, 1), roles: snap };
+  if (session.lastCheckpoint) {
+    const dw = wall - session.lastCheckpoint.wall, dm = mono - session.lastCheckpoint.mono;
+    cp.wallDeltaMs = dw; cp.monoDeltaMs = round(dm, 1);
+    if (Math.abs(dw - dm) > CLOCK_JUMP_MS) {
+      const j = { t: 'clock_jump', wall, wallDeltaMs: dw, monoDeltaMs: round(dm, 1), disagreementMs: round(dw - dm, 1) };
+      session.clockJumps.push(j);
+      journal(j);
+    }
+  }
+  session.lastCheckpoint = cp;
+  journal(cp);
+  self.postMessage({ type: 'PROGRESS', checkpoint: cp, roles: Object.fromEntries([...roles.values()].map((r) => [r.role, roleStats(r)])),
+                     clockJumps: session.clockJumps.length });
+}
+
+// ───────────────────────────────────────────────────── report & stop ──
+
+async function writeReport(report, final = false) {
+  if (!session) throw new Error('no session');
+  const fh = await session.dir.getFileHandle('capture-report.json', { create: true });
+  const h = await fh.createSyncAccessHandle();
+  try {
+    const bytes = new TextEncoder().encode(JSON.stringify(report, null, 2));
+    h.truncate(0); h.write(bytes, { at: 0 }); h.flush();
+  } finally { h.close(); }
+  journal({ t: final ? 'report_final' : 'report_initial', bytes: JSON.stringify(report).length });
+  self.postMessage({ type: 'REPORT_WRITTEN', final });
+}
+
+async function stopAll() {
+  if (!session) { self.postMessage({ type: 'STOPPED', result: null }); return; }
+  clearInterval(session.flushTimer); clearInterval(session.checkpointTimer);
+  checkpoint();
+  const stats = {};
+  for (const r of roles.values()) { await finalizeRole(r, 'stop'); stats[r.role] = roleStats(r); }
+  const result = {
+    sessionId: session.id, roles: stats, checkpoints: session.checkpoints, clockJumps: session.clockJumps,
+    journalBytes: session.journalSize, openedWall: session.openedWall, closedWall: Date.now(),
+  };
+  journal({ t: 'session_stopped', ...result });
+  // The session (journal + directory) stays open: the offscreen document writes
+  // the FINAL capture-report.json after it has our stats, then sends CLOSE_SESSION.
+  // (First version nulled the session here — measured 2026-09-07: every final
+  // report timed out with "no session" and all reports on disk said final:false.)
+  session.stopped = true;
+  self.postMessage({ type: 'STOPPED', result });
+}
+
+function closeSession() {
+  if (!session) { self.postMessage({ type: 'SESSION_CLOSED' }); return; }
+  journal({ t: 'session_close', journalBytes: session.journalSize });
+  try { session.journalHandle.flush(); session.journalHandle.close(); } catch {}
+  session = null; roles.clear();
+  self.postMessage({ type: 'SESSION_CLOSED' });
+}
+
+// ─────────────────────────────────────────────────────────────── probe ──
+
+async function probe() {
+  const out = {
+    ok: true,
+    apis: {
+      AudioEncoder: typeof AudioEncoder !== 'undefined', AudioDecoder: typeof AudioDecoder !== 'undefined',
+      AudioData: typeof AudioData !== 'undefined', MediaStreamTrackProcessor: typeof MediaStreamTrackProcessor !== 'undefined',
+      storageGetDirectory: !!navigator.storage?.getDirectory, performanceMemory: !!performance.memory,
+    },
+    opfs: { syncAccessHandle: false, error: null },
+  };
+  try {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle('__worker_probe__', { create: true });
+    const fh = await dir.getFileHandle('probe.bin', { create: true });
+    const t0 = performance.now();
+    const h = await fh.createSyncAccessHandle();
+    const openMs = performance.now() - t0;
+    const buf = new Uint8Array(64 * 1024);
+    for (let i = 0; i < buf.length; i++) buf[i] = i & 255;
+    const t1 = performance.now();
+    let written = 0;
+    for (let k = 0; k < 16; k++) written += h.write(buf, { at: written });
+    h.flush();
+    const writeMs = performance.now() - t1;
+    const size = h.getSize();
+    const tail = new Uint8Array(1024);
+    h.read(tail, { at: size - 1024 });
+    let okContent = true;
+    for (let i = 0; i < 1024; i++) if (tail[i] !== ((size - 1024 + i) & 255)) { okContent = false; break; }
+    h.truncate(0); h.flush(); h.close();
+    await dir.removeEntry('probe.bin').catch(() => {});
+    await root.removeEntry('__worker_probe__', { recursive: true }).catch(() => {});
+    out.opfs = { syncAccessHandle: true, error: null, openMs: Math.round(openMs * 100) / 100, wrote: written,
+                 sizeAfter: size, contentOk: okContent, writeFlushMBps: Math.round((written / 1e6) / (writeMs / 1000) * 10) / 10 };
+  } catch (e) {
+    out.ok = false; out.opfs = { syncAccessHandle: false, error: String(e?.message ?? e) };
+  }
+  if (typeof AudioEncoder !== 'undefined') {
+    try { out.opusInWorker = (await AudioEncoder.isConfigSupported({ codec: 'opus', sampleRate: 48000, numberOfChannels: 1, bitrate: 48000 })).supported; }
+    catch (e) { out.opusInWorker = `error: ${String(e?.message ?? e)}`; }
+  }
+  return out;
+}

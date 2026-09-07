@@ -31,6 +31,10 @@
  * очистки данных сайта.
  */
 
+// Момент старта ЭТОГО экземпляра service worker'а. performance.now() при
+// получении START = сколько worker уже живёт: малое значение = холодный старт.
+const SW_BOOT = { wall: Date.now(), timeOrigin: performance.timeOrigin };
+
 const OFFSCREEN_PATH = 'src/offscreen/offscreen.html';
 const PERMISSION_PATH = 'src/permission/permission.html';
 const STATE_KEY = 'ironmemo.captureState.v1';
@@ -105,7 +109,7 @@ async function ensureOffscreen() {
     contextTypes: ['OFFSCREEN_DOCUMENT'],
     documentUrls: [chrome.runtime.getURL(OFFSCREEN_PATH)],
   });
-  if (existing.length) return;
+  if (existing.length) return { existed: true };
 
   await chrome.offscreen.createDocument({
     url: OFFSCREEN_PATH,
@@ -115,6 +119,7 @@ async function ensureOffscreen() {
       + 'и потоковая запись сегментов на диск. Service worker для этого не подходит: '
       + 'он эфемерен и не имеет доступа к MediaStream.',
   });
+  return { existed: false };
 }
 
 async function closeOffscreenIfIdle() {
@@ -126,10 +131,16 @@ async function closeOffscreenIfIdle() {
 
 // ───────────────────────────────────────────────── команды ──
 
-async function startCapture({ tabId } = {}) {
+async function startCapture({ tabId, clickedAt = null } = {}) {
+  // Замер холодного старта (PLAN-CHANGES B3): каждая ступень — с меткой времени.
+  // swAgeMs — сколько service worker жил к моменту START; < ~200 мс = холодный.
+  const T = { clickedAt, receivedAt: Date.now(), swAgeMs: Math.round(performance.now()), swBootWall: SW_BOOT.wall, marks: {} };
+  const mark = (name) => { T.marks[name] = Date.now() - T.receivedAt; };
   await setState({ status: 'starting', error: null });
+  mark('stateStarting');
   try {
     const settings = (await chrome.storage.local.get('ironmemo.settings.v1'))['ironmemo.settings.v1'] ?? {};
+    mark('settingsLoaded');
     const mode = settings?.source?.mode ?? 'mic';
     const needsMic = mode === 'mic' || mode === 'mic+tab';
     const needsTab = mode === 'tab' || mode === 'mic+tab';
@@ -141,9 +152,11 @@ async function startCapture({ tabId } = {}) {
     // способ увидеть UA-prompt.
     if (needsMic) {
       const perm = await getMicPermission();
+      mark('permissionChecked');
       if (!perm.granted) {
         await setState({ status: 'awaiting_perm', error: null });
         await requestMicPermissionInteractively();
+        mark('permissionGranted');
         // Дошли сюда — значит granted; повторный старт не нужен, продолжаем.
       }
     }
@@ -152,7 +165,9 @@ async function startCapture({ tabId } = {}) {
     //
     // Stream ID из tabCapture живёт несколько секунд. Если offscreen ещё не
     // создан, ID устареет пока chrome.offscreen.createDocument доедет до конца.
-    await ensureOffscreen();
+    const off = await ensureOffscreen();
+    T.offscreenExisted = off.existed;
+    mark('offscreenReady');
 
     // ── 3. Захват звука вкладки (если нужен) — под user gesture ──
     let streamId = null;
@@ -165,18 +180,22 @@ async function startCapture({ tabId } = {}) {
         throw new Error('Звук служебных страниц браузера захватить нельзя. Откройте обычный сайт.');
       }
       streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+      mark('streamIdObtained');
     }
 
     // ── 4. START в offscreen — сразу, пока streamId ещё жив ──
     const sessionId = crypto.randomUUID();
     const res = await chrome.runtime.sendMessage({
-      target: 'offscreen', type: 'START', sessionId, streamId, settings,
+      target: 'offscreen', type: 'START', sessionId, streamId, settings, startTimings: T,
     });
+    mark('offscreenStarted');
     if (!res?.ok) throw new Error(res?.error ?? 'Offscreen-документ не подтвердил старт.');
+    T.totalMs = Date.now() - T.receivedAt;
+    T.clickToRecordingMs = clickedAt ? Date.now() - clickedAt : null;
 
     return await setState({
       status: 'recording', sessionId, startedAt: Date.now(),
-      appliedReport: res.appliedReport ?? null,
+      appliedReport: res.appliedReport ?? null, startTimings: T,
     });
   } catch (e) {
     const raw = String(e?.message ?? e);
@@ -213,7 +232,7 @@ async function stopCapture() {
   const res = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'STOP' })
     .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   const next = await setState({
-    status: 'idle', sessionId: null, startedAt: null,
+    status: 'idle', sessionId: null, startedAt: null, progress: null, lastWarning: null, lastInfo: null,
     lastResult: res?.result ?? null, error: res?.ok ? null : (res?.error ?? null),
   });
   await closeOffscreenIfIdle();
@@ -261,9 +280,26 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           return sendResponse({ ok: true });
         }
         case 'OFFSCREEN_EVENT': {
-          if (msg.event === 'error') await setState({ status: 'error', error: msg.error });
+          // 'error' во время записи НЕ переводит статус в error: запись идёт (на паузе
+          // по устройству или продолжается без вкладки). Текст показывается как lastWarning.
+          if (msg.event === 'error') {
+            const s = await getState();
+            if (s.status === 'recording' || s.status === 'paused') await setState({ lastWarning: msg.error, lastWarningAt: Date.now() });
+            else await setState({ status: 'error', error: msg.error });
+          }
+          if (msg.event === 'warning') await setState({ lastWarning: msg.error, lastWarningAt: Date.now() });
+          if (msg.event === 'info') await setState({ lastInfo: msg.info ?? null, lastInfoAt: Date.now() });
           if (msg.event === 'progress') await setState({ progress: msg.progress });
           return sendResponse({ ok: true });
+        }
+        case 'DEBUG_OFFSCREEN': {
+          // Test bench only: forward a DEBUG command to the offscreen document.
+          const r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'DEBUG', what: msg.what, role: msg.role, sampleRate: msg.sampleRate });
+          return sendResponse({ ok: true, result: r });
+        }
+        case 'OFFSCREEN_STATUS': {
+          const r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'STATUS' }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+          return sendResponse({ ok: true, result: r });
         }
         default: return sendResponse({ ok: false, error: `Неизвестная команда: ${msg.type}` });
       }
