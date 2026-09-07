@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>IronMemo capture host</title>
+</head>
+<body>
+  <!--
+    Этот документ невидим для пользователя, но именно он владеет записью:
+    MediaStream, AudioContext, энкодеры и запись сегментов на диск живут здесь.
+    Popup закрывается, service worker выгружается — этот документ остаётся.
+  -->
+  <script type="module" src="offscreen.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+:root { --bg:#0f1115; --panel:#1d212a; --line:#2a2f3a; --text:#e6e8ee; --muted:#97a0b0;
+        --accent:#4f7cff; --error:#ef5f6b; --warn:#f0a238; --ok:#46c08a; }
+* { box-sizing: border-box; }
+body { width: 320px; margin: 0; padding: 14px; background: var(--bg); color: var(--text);
+       font: 13px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+
+.head { display: flex; gap: 11px; align-items: center; margin-bottom: 12px; }
+.dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.recording { background: var(--error); animation: pulse 1.4s ease-in-out infinite; }
+.dot.paused { background: var(--warn); }
+.dot.error { background: var(--error); }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(239,95,107,.55); }
+                   50% { box-shadow: 0 0 0 7px rgba(239,95,107,0); } }
+.timer { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+
+.config { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+          padding: 9px 11px; font-size: 11.5px; color: var(--muted); margin-bottom: 12px; }
+.config b { color: var(--text); font-weight: 500; }
+.config div + div { margin-top: 3px; }
+
+.actions { display: flex; gap: 8px; }
+.btn { flex: 1; background: var(--panel); color: var(--text); border: 1px solid var(--line);
+       border-radius: 8px; padding: 9px; font: inherit; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+.btn.danger  { background: var(--error); border-color: var(--error); color: #fff; font-weight: 500; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.err, .orphan { margin-top: 11px; padding: 9px 11px; border-radius: 8px; font-size: 11.5px; }
+.err { background: rgba(239,95,107,.1); border: 1px solid rgba(239,95,107,.4); color: #ffc7cc; }
+.orphan { background: rgba(240,162,56,.1); border: 1px solid rgba(240,162,56,.4); color: #ffd9a0; }
+
+.foot { display: flex; justify-content: space-between; margin-top: 13px;
+        padding-top: 11px; border-top: 1px solid var(--line); }
+.foot a { color: var(--muted); text-decoration: none; font-size: 11.5px; }
+.foot a:hover { color: var(--accent); }

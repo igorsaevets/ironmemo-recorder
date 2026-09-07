@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="head">
+    <span class="dot" id="stateDot"></span>
+    <div>
+      <strong id="stateText">Готов к записи</strong>
+      <div class="timer" id="timer">00:00:00</div>
+    </div>
+  </div>
+
+  <div class="config" id="config"></div>
+
+  <div class="actions">
+    <button id="start" class="btn primary">Начать запись</button>
+    <button id="pause" class="btn" hidden>Пауза</button>
+    <button id="stop"  class="btn danger" hidden>Остановить</button>
+  </div>
+
+  <div class="err" id="err" hidden></div>
+  <div class="orphan" id="orphan" hidden></div>
+
+  <div class="foot">
+    <a href="#" id="openOptions">Настройки и стенд замеров</a>
+    <a href="#" id="openLab">Проба возможностей</a>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

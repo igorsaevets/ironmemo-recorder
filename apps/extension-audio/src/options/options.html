@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>IronMemo Recorder — настройки и стенд замеров</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <div>
+        <h1>IronMemo Audio Recorder</h1>
+        <p class="sub">Стенд замеров · схема настроек <code id="schemaVer">—</code></p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <label class="stage-filter">
+        Показывать:
+        <select id="stageFilter">
+          <option value="all">все опции</option>
+          <option value="mvp">только релизные (mvp)</option>
+          <option value="experiment">релизные + экспериментальные</option>
+        </select>
+      </label>
+      <button id="openLab" class="btn">Проба возможностей →</button>
+    </div>
+  </header>
+
+  <div class="notice">
+    <strong>Это не «настройки для пользователя», а конфигурация эксперимента.</strong>
+    Почти каждый параметр здесь нельзя выбрать из документации — его надо измерить на этой машине
+    и на этом корпусе речи. Поэтому опции намеренно открыты все сразу, каждая объяснена,
+    и каждая попадает в манифест записи. Перед релизом лишнее прячется фильтром выше,
+    а не удаляется из схемы.
+  </div>
+
+  <main class="layout">
+    <nav class="sidenav" id="sidenav"></nav>
+
+    <section class="content">
+      <div class="presets card">
+        <h2>Пресеты</h2>
+        <p class="muted">Готовые наборы под конкретный вопрос, на который мы отвечаем замером.</p>
+        <div id="presetList" class="preset-list"></div>
+      </div>
+
+      <div id="issues" class="issues" hidden></div>
+
+      <form id="form"></form>
+
+      <div class="card profiles">
+        <h2>Профили</h2>
+        <div class="row">
+          <input type="text" id="profileName" placeholder="имя профиля, напр. opus-48-raw-mic">
+          <button type="button" id="saveProfile" class="btn">Сохранить</button>
+          <button type="button" id="exportProfile" class="btn ghost">Экспорт в файл</button>
+          <button type="button" id="importProfile" class="btn ghost">Импорт из файла</button>
+          <input type="file" id="importFile" accept="application/json" hidden>
+        </div>
+        <div id="profileList" class="profile-list"></div>
+      </div>
+    </section>
+
+    <aside class="summary card" id="summary">
+      <h2>Сводка</h2>
+      <dl>
+        <dt>Источников</dt><dd id="sumSources">—</dd>
+        <dt>Файлов на запись</dt><dd id="sumAssets">—</dd>
+        <dt>Оценка объёма</dt><dd id="sumSize">—</dd>
+        <dt>За 4 часа</dt><dd id="sumSize4h">—</dd>
+        <dt>Стратегия сегментов</dt><dd id="sumSeg">—</dd>
+        <dt>Макс. потеря при сбое</dt><dd id="sumLoss">—</dd>
+      </dl>
+      <div class="sticky-actions">
+        <button type="button" id="save" class="btn primary">Сохранить настройки</button>
+        <button type="button" id="reset" class="btn ghost">Сбросить всё</button>
+        <p id="saveState" class="savestate"></p>
+      </div>
+    </aside>
+  </main>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>
