@@ -647,8 +647,14 @@ export const PRESETS = {
     label: 'Кандидат на crash-safe',
     description: 'Завершённые сегменты + журнал + проверка декодированием. Это конфигурация, '
                + 'которую мы пытаемся довести до права называться «восстановление после сбоя».',
+    // ИСПРАВЛЕНО 07.09.2026. Первая редакция ставила здесь контейнер Ogg —
+    // «он устойчивее к обрыву». Замер в Chrome 152 (и в CfT 152, и в реальном
+    // браузере Игоря) показал: `MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')`
+    // возвращает FALSE. Пресет предлагал конфигурацию, которая падает при старте.
+    // Устойчивость Ogg к обрыву проверяется в И-1 через путь WebCodecs, где
+    // контейнер пишем мы сами и поддержка MediaRecorder не нужна.
     values: {
-      'audioEnc.impl': 'mediarecorder', 'audioEnc.container': 'ogg',
+      'audioEnc.impl': 'mediarecorder', 'audioEnc.container': 'webm',
       'storage.segmentStrategy': 'rolling_finalized', 'storage.segmentSeconds': 30,
       'storage.journalEnabled': true, 'recovery.remuxOnRecover': true,
       'recovery.validateDecodeAfterRemux': true, 'storage.hashAlgo': 'sha256_incremental',
@@ -782,6 +788,74 @@ export function validate(values) {
   if (g('audioProc.rawMode') && g('source.mode') !== 'mic') {
     issues.push({ level: 'warn', key: 'audioProc.rawMode',
       text: 'Без эхоподавления микрофон запишет звук вкладки из колонок: удалённые голоса попадут в local_mic.' });
+  }
+  return issues;
+}
+
+/**
+ * Собрать MIME-строку так же, как это делает offscreen.js.
+ * Держать в одном месте обязательно: если страница настроек и рекордер соберут
+ * строку по-разному, настройки будут показывать «поддерживается», а запись падать.
+ */
+export function resolveMime(values) {
+  const codec = getByPath(values, 'audioEnc.codec');
+  const container = getByPath(values, 'audioEnc.container');
+  if (codec === 'pcm16') return 'audio/webm;codecs=pcm';
+  const codecPart = { opus: 'opus', aac: 'mp4a.40.2' }[codec] ?? 'opus';
+  const containerPart = { webm: 'audio/webm', ogg: 'audio/ogg', mp4: 'audio/mp4', wav: 'audio/wav' }[container]
+    ?? 'audio/webm';
+  return `${containerPart};codecs=${codecPart}`;
+}
+
+/**
+ * Проверка ФАКТИЧЕСКОЙ поддержки в этом браузере, а не по таблице.
+ *
+ * Появилась после конкретной ошибки: пресет «Кандидат на crash-safe» предлагал
+ * контейнер Ogg как более устойчивый к обрыву, и это звучало разумно — но
+ * Chrome 152 на `audio/ogg;codecs=opus` отвечает false. Пресет предлагал
+ * конфигурацию, которая падает при старте записи.
+ *
+ * Вывод общий: никакая комбинация в схеме не должна считаться рабочей, пока
+ * её не подтвердил сам браузер.
+ */
+export function checkRuntimeSupport(values) {
+  const issues = [];
+  if (typeof MediaRecorder === 'undefined') return issues;
+
+  const impl = getByPath(values, 'audioEnc.impl');
+  const mime = resolveMime(values);
+
+  if (impl !== 'webcodecs' && !MediaRecorder.isTypeSupported(mime)) {
+    const codec = getByPath(values, 'audioEnc.codec');
+    const alts = ['audio/webm;codecs=opus', 'audio/mp4;codecs=mp4a.40.2', 'audio/webm']
+      .filter((m) => MediaRecorder.isTypeSupported(m));
+    issues.push({
+      level: 'error', key: 'audioEnc.container',
+      text: `Этот браузер НЕ поддерживает ${mime} для MediaRecorder. Запись не запустится.`
+          + (alts.length ? ` Работают: ${alts.join(', ')}.` : ''),
+    });
+  }
+
+  if (getByPath(values, 'video.enabled')) {
+    const vcodec = getByPath(values, 'video.codec');
+    const vmime = {
+      h264: 'video/mp4;codecs=avc1.42E01E', vp8: 'video/webm;codecs=vp8',
+      vp9: 'video/webm;codecs=vp9', av1: 'video/webm;codecs=av01.0.04M.08',
+      hevc: 'video/mp4;codecs=hvc1.1.6.L93.B0',
+    }[vcodec];
+    if (vmime && !MediaRecorder.isTypeSupported(vmime)) {
+      issues.push({ level: 'error', key: 'video.codec',
+        text: `Этот браузер не поддерживает ${vmime}.` });
+    }
+    // Замерено 07.09.2026 в Chrome 152: H.264 поддерживается MediaRecorder,
+    // но VideoEncoder.isConfigSupported отвечает false при ЛЮБОЙ подсказке.
+    // То есть выбор движка меняет доступность кодека — это надо видеть в UI,
+    // а не выяснять при первом запуске записи.
+    if (vcodec === 'h264' && getByPath(values, 'audioEnc.impl') === 'webcodecs') {
+      issues.push({ level: 'warn', key: 'video.codec',
+        text: 'H.264 доступен через MediaRecorder, но WebCodecs в Chrome 152 его конфигурацию '
+            + 'не принимает. На пути WebCodecs выберите VP9 или AV1.' });
+    }
   }
   return issues;
 }

@@ -6,7 +6,7 @@
 
 import {
   SETTINGS, GROUPS, PRESETS, SETTINGS_SCHEMA_VERSION,
-  getByPath, setByPath, isVisible, validate, estimateMBPerHour,
+  getByPath, setByPath, isVisible, validate, estimateMBPerHour, checkRuntimeSupport,
 } from '../shared/settings-schema.js';
 import {
   loadSettings, saveSettings, resetSettings, applyPreset,
@@ -242,7 +242,9 @@ function onChange(key, value) {
 // ────────────────────────────────────────── производные величины ──
 
 function refreshDerived() {
-  const issues = validate(values);
+  // Сначала правила схемы, затем реальный опрос браузера. Второе важнее:
+  // схема может считать комбинацию разумной, а MediaRecorder — не поддерживать её.
+  const issues = [...validate(values), ...checkRuntimeSupport(values)];
   const box = $('issues');
   box.innerHTML = '';
   box.hidden = issues.length === 0;
@@ -284,7 +286,9 @@ function refreshDerived() {
 // ─────────────────────────────────────────────────── действия ──
 
 async function onSave() {
-  const issues = validate(values);
+  // Обе проверки, а не только схемная: иначе можно сохранить конфигурацию,
+  // которую этот браузер не поддерживает, и узнать об этом при старте записи.
+  const issues = [...validate(values), ...checkRuntimeSupport(values)];
   const errors = issues.filter((i) => i.level === 'error');
   if (errors.length) {
     flash(`Не сохранено: ${errors.length} конфликт(ов) нужно устранить.`, 'error');
