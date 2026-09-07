@@ -705,7 +705,8 @@ function computeDrift() {
     if (m0 == null || m1 == null) continue;
     const wall = (cps.at(-1).wall - cps[0].wall) / 1000;
     const driftMs = ((m1 - m0) - wall) * 1000;
-    out.vsWall[r] = { driftMs: Math.round(driftMs * 10) / 10, ppm: wall > 0 ? Math.round(driftMs / wall) : null, mediaSec: Math.round((m1 - m0) * 100) / 100, wallSec: Math.round(wall * 100) / 100 };
+    // ms per second is parts per thousand; ×1000 gives ppm.
+    out.vsWall[r] = { driftMs: Math.round(driftMs * 10) / 10, ppm: wall > 0 ? Math.round(driftMs / wall * 1000 * 10) / 10 : null, mediaSec: Math.round((m1 - m0) * 100) / 100, wallSec: Math.round(wall * 100) / 100 };
   }
   for (let i = 0; i < roles.length; i++) for (let j = i + 1; j < roles.length; j++) {
     const a = roles[i], b = roles[j];
@@ -725,7 +726,7 @@ function computeDrift() {
     out.pairs[`${a}_vs_${b}`] = {
       initialOffsetMs: d0 == null ? null : Math.round(d0 * 1000 * 10) / 10,
       driftMs: last.driftMs, maxAbsDriftMs: Math.round(maxAbs * 10) / 10,
-      ppm: last.elapsedSec > 0 ? Math.round(last.driftMs / last.elapsedSec * 10) / 10 : null,
+      ppm: last.elapsedSec > 0 ? Math.round(last.driftMs / last.elapsedSec * 1000 * 10) / 10 : null,
       points: series.length,
       series: series.length > 60 ? series.filter((_, k) => k % Math.ceil(series.length / 60) === 0 || k === series.length - 1) : series,
     };
