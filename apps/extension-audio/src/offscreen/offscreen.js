@@ -492,6 +492,7 @@ async function startWebCodecs(applied) {
       flushIntervalMs: g('storage.flushIntervalMs', 1000),
       journalEnabled: g('storage.journalEnabled', true),
       fillGapsWithSilence: g('source.onDeviceReturn', 'resume_fill_silence') === 'resume_fill_silence',
+      muxerGapFillMs: g('storage.muxerGapFillMs', 40),
     },
     settingsSnapshot: g('experiment.forceProfileEveryRecording', true) ? state.settings : null,
   }, 'SESSION_OPENED');
@@ -793,6 +794,8 @@ function requestedVsApplied(final) {
     // (measured: one 10 000 ms interval in the `devices` run skewed the mean to 1094 ms).
     'storage.flushIntervalMs': { applied: state.engine === 'webcodecs' && final ? (anyRole?.pageIntervalMs?.p50 ?? null) : null, note: state.engine === 'webcodecs' ? `интервалы страниц Ogg (p50/p95/max/mean): ${JSON.stringify(anyRole?.pageIntervalMs ?? null)}` : 'не применимо к MediaRecorder' },
     'storage.journalEnabled': { applied: g('storage.journalEnabled', true), note: state.engine === 'webcodecs' ? 'журнал ведёт worker (journal.jsonl)' : `записей: ${state.journal.length}` },
+    'storage.muxerGapFillMs': { applied: state.engine === 'webcodecs' ? g('storage.muxerGapFillMs', 40) : null,
+      note: state.engine === 'webcodecs' ? `вставлено тишины по ролям, с: ${JSON.stringify(Object.fromEntries(Object.entries(rs).map(([k, v]) => [k, v.fillerSec ?? 0])))}` : 'не применимо к MediaRecorder' },
   };
   const out = [];
   for (const s of SETTINGS) {

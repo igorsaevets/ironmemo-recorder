@@ -543,6 +543,20 @@ export const SETTINGS = [
     readback: 'измеренный интервал страниц (capture-report, journal)',
   },
   {
+    key: 'storage.muxerGapFillMs', group: 'storage', type: 'int', stage: 'experiment',
+    label: 'WebCodecs: заполнять пропуски во времени тишиной от, мс (0 = выкл.)', default: 40, min: 0, max: 5000, step: 10,
+    why: 'Измерено 07.09.2026: с Opus DTX энкодер молчит по ~400 мс, и muxer, складывающий длительности '
+       + 'пакетов, схлопнул 205,8 с входа в файл на 47,7 с. Потеря входа (скачок timestamp на 260 мс) '
+       + 'делает то же. Timestamp чанков энкодера при DTX идут подряд и шкалу не несут (измерено), поэтому '
+       + 'позиция считается по числу ВХОДНЫХ кадров; в отставание ≥ N мс вставляются кадры нулевой длины '
+       + '(1 байт на 20 мс) — файл остаётся на шкале входа и любой декодер отдаёт полную длительность.',
+    risk: 'Слишком мелкий порог начнёт «исправлять» медленные часы устройства вставками по 20 мс; '
+        + '0 возвращает схлопывание времени при DTX.',
+    requires: { key: 'audioEnc.impl', equals: 'webcodecs' },
+    decides: 'ADR-004',
+    readback: 'capture-report: roles.*.fillerPackets / fillerSec; journal gap_filled',
+  },
+  {
     key: 'storage.journalEnabled', group: 'storage', type: 'bool', stage: 'mvp',
     label: 'Журнал подтверждённых записей', default: true,
     why: 'Восстановление строится на журнале того, что ФАКТИЧЕСКИ легло на диск, а не на надежде, '

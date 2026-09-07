@@ -123,6 +123,7 @@ export class OggOpusMuxer {
     this.preSkip = preSkip;
     this.pending = [];       // packets buffered for the next page
     this.pendingBytes = 0;
+    this.pendingSamples = 0; // 48 kHz samples queued but not yet in a page (position = granule + pendingSamples)
     this.packets = 0;
     this.bytesOut = 0;
     this.headersDone = false;
@@ -146,6 +147,7 @@ export class OggOpusMuxer {
     if (!this.headersDone) throw new Error('headerPages() first');
     this.pending.push({ bytes, samples48k });
     this.pendingBytes += bytes.length;
+    this.pendingSamples += samples48k;
     this.packets++;
   }
 
@@ -165,7 +167,7 @@ export class OggOpusMuxer {
       batch.push(p); lacing += need;
     }
     if (batch.length) pages.push(batch);
-    this.pending = []; this.pendingBytes = 0;
+    this.pending = []; this.pendingBytes = 0; this.pendingSamples = 0;
 
     const out = [];
     pages.forEach((batch, i) => {
@@ -287,6 +289,18 @@ function findOggS(b, from) {
     if (b[i] === 0x4f && b[i + 1] === 0x67 && b[i + 2] === 0x67 && b[i + 3] === 0x53) return i;
   }
   return -1;
+}
+
+/**
+ * A silence filler: the TOC of a real packet with code 0 and NO frame data
+ * (RFC 6716 §3.2.2: zero-length frame = "lost frame", the decoder runs packet
+ * loss concealment → near-silence). Measured 2026-09-07 with ffmpeg 9.0: 100 such
+ * packets decoded as 100 × 20 ms with peak 78/32767. One byte per 20 ms = 0.4 kbps.
+ * Used to keep the Ogg timeline on the wall clock across Opus DTX gaps (the encoder
+ * emits nothing for ~400 ms at a time) and dropped input.
+ */
+export function silenceFillerFor(packet) {
+  return new Uint8Array([packet[0] & 0xfc]);
 }
 
 /**

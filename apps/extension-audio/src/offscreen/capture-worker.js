@@ -43,7 +43,7 @@
  *   ROLE_CLOSED, PROGRESS, ERROR, REPORT_WRITTEN, STOPPED.
  */
 
-import { OggOpusMuxer, parseOpusHead, opusPacketSamples } from '../shared/ogg-opus.js';
+import { OggOpusMuxer, parseOpusHead, opusPacketSamples, silenceFillerFor } from '../shared/ogg-opus.js';
 
 const CHECKPOINT_MS = 10_000;     // consistent multi-role snapshot cadence
 const JOURNAL_EVERY_PAGES = 5;    // one journal line per N pages per role
@@ -95,7 +95,7 @@ async function openSession({ sessionId, t0, opts = {}, settingsSnapshot = null }
   const jh = await jfh.createSyncAccessHandle();
   session = {
     id: sessionId, dir, journalHandle: jh, journalSize: jh.getSize(),
-    t0, opts: { flushIntervalMs: 1000, journalEnabled: true, fillGapsWithSilence: true, ...opts },
+    t0, opts: { flushIntervalMs: 1000, journalEnabled: true, fillGapsWithSilence: true, muxerGapFillMs: 40, ...opts },
     settingsSnapshot,
     lastCheckpoint: null, checkpoints: 0, clockJumps: [],
     flushTimer: null, checkpointTimer: null,
@@ -146,6 +146,7 @@ async function openRole({ role, readable, encoder, expected = {}, muxer = {}, do
     silenceFilled48k: 0, gaps: [], paused: false, closed: false, ended: false, endedReason: null,
     openedWall: Date.now(), openedMono: performance.now(), opened: null,
     pageIntervalsMs: [], lastPageMono: null,
+    fillerPackets: 0, fillerSamples48k: 0, fillerEvents: 0,
   };
   roles.set(role, r);
   journal({ t: 'role_open', role, fileBytesAtOpen: r.fileBytes, expected, encoderRequest: encoder });
@@ -179,6 +180,7 @@ async function openSynthRole({ role, sampleRate, encoder }) {
     silenceFilled48k: 0, gaps: [], paused: false, closed: false, ended: false, endedReason: null,
     openedWall: Date.now(), openedMono: performance.now(), opened: null,
     pageIntervalsMs: [], lastPageMono: null, synthetic: true,
+    fillerPackets: 0, fillerSamples48k: 0, fillerEvents: 0,
   };
   roles.set(role, r);
   journal({ t: 'role_open', role, synthetic: true, sampleRate, encoderRequest: encoder });
@@ -386,11 +388,41 @@ function onChunk(r, chunk, meta) {
   const buf = new Uint8Array(chunk.byteLength);
   chunk.copyTo(buf);
   const samples48k = opusPacketSamples(buf);
+  // Keep the file on the INPUT timeline. With Opus DTX Chrome's AudioEncoder skips
+  // whole frames during silence AND numbers the chunks it does emit sequentially
+  // (chunk.timestamp = previous + duration, measured 2026-09-07: 3 s of input with
+  // 1.5 s of silence came out as 89 chunks ending at 1.76 s), so neither packet
+  // durations nor chunk timestamps can place packets — only the count of input
+  // frames handed to the encoder can. When that count runs ahead of the written
+  // position by ≥ muxerGapFillMs (beyond one frame of encoder latency), insert
+  // zero-length frames (1 byte each) until the file catches up. Same mechanism
+  // covers any other frame the encoder swallows.
+  if (r.firstChunkTs === null) r.firstChunkTs = chunk.timestamp;
+  fillTimelineGap(r, buf, false);
   r.muxer.addPacket(buf, samples48k);
+  r.lastToc = buf.subarray(0, 1);
   r.packets++; r.encodedBytes += buf.length;
   r.chunkDurationsSeen.add(chunk.duration ?? null);
   if (r.firstChunkTs === null) r.firstChunkTs = chunk.timestamp;
   r.lastChunkTs = chunk.timestamp; r.lastChunkDuration = chunk.duration ?? null;
+}
+
+/** Insert silence fillers until the muxer position reaches the input frame count (minus one frame of latency). */
+function fillTimelineGap(r, tocSource, atEnd) {
+  const fillMs = session?.opts.muxerGapFillMs ?? 0;
+  if (!(fillMs > 0) || !r.muxer || !r.sampleRate) return 0;
+  const expected48k = Math.round(r.frames * 48000 / r.sampleRate) - (atEnd ? 0 : 960);
+  const position48k = r.muxer.granule + r.muxer.pendingSamples;
+  const gap = expected48k - position48k;
+  if (gap < fillMs * 48) return 0;
+  const filler = silenceFillerFor(tocSource ?? r.lastToc ?? new Uint8Array([0xf8]));
+  const step = opusPacketSamples(filler) || 960;
+  const k = Math.floor(gap / step);
+  if (k <= 0) return 0;
+  for (let i = 0; i < k; i++) r.muxer.addPacket(filler, step);
+  r.fillerPackets += k; r.fillerSamples48k += k * step; r.fillerEvents++;
+  if (r.fillerEvents <= 50 || r.fillerEvents % 100 === 0) journal({ t: 'gap_filled', role: r.role, gapMs: Math.round(gap / 48), packets: k, atEnd, fillerEvents: r.fillerEvents });
+  return k;
 }
 
 function writeBytes(r, bytes) {
@@ -439,6 +471,7 @@ async function finalizeRole(r, reason) {
     try { await r.encoder.flush(); } catch (e) { journal({ t: 'encoder_flush_error', role: r.role, error: String(e?.message ?? e) }); }
     try { r.encoder.close(); } catch {}
   }
+  if (r.muxer) fillTimelineGap(r, null, true); // tail silence the encoder never emitted (DTX)
   r.closed = false; await flushRole(r, { eos: true }); r.closed = true;
   try { r.handle.flush(); r.handle.close(); } catch (e) { journal({ t: 'handle_close_error', role: r.role, error: String(e?.message ?? e) }); }
   journal({ t: 'role_close', role: r.role, reason, ...roleStats(r) });
@@ -476,8 +509,12 @@ function roleStats(r) {
     granuleSec: r.muxer ? round(r.muxer.granule / 48000, 4) : null,
     // encoded 48 kHz samples vs input frames converted to 48 kHz: the encoder's
     // internal resampler (44.1 k → 48 k) must keep these equal within one packet.
+    // fillers stand in for input frames the encoder swallowed, so they are NOT subtracted;
+    // device-gap silence was fed as extra AudioData outside `frames`, so it is.
     granuleMinusInput48k: r.muxer && r.sampleRate ? Math.round(r.muxer.granule - r.frames * 48000 / r.sampleRate - r.silenceFilled48k) : null,
     silenceFilled48k: r.silenceFilled48k, gaps: r.gaps,
+    fillerPackets: r.fillerPackets, fillerSamples48k: r.fillerSamples48k, fillerEvents: r.fillerEvents,
+    fillerSec: round(r.fillerSamples48k / 48000, 3),
     encoderRequested: r.encoderRequest, encoderApplied: r.encoderApplied, encoderSupported: r.encoderSupported,
     opusHead: r.opusHead, opusHeadSource: r.opusHeadSource,
     pageIntervalMs: summarize(r.pageIntervalsMs),
