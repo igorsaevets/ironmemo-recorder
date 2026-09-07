@@ -88,6 +88,11 @@ async function refresh() {
   $('start').disabled = $('pause').disabled = $('stop').disabled = false;
 
   if (s.error) showError(s.error); else { $('err').hidden = true; $('errActions').hidden = true; }
+  // Warnings while recording (device lost/returned, tab capture ended) do not change the
+  // status; they arrive as lastWarning/lastInfo from the offscreen document.
+  const warn = (rec || paused) ? (s.lastWarning || s.lastInfo) : null;
+  $('warn').hidden = !warn;
+  $('warn').textContent = warn ?? '';
 
   if (s.orphaned) {
     $('orphan').hidden = false;
