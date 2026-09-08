@@ -57,6 +57,7 @@ const JOURNAL_EVERY_PAGES = 5;    // one journal line per N pages per role
 // per-frame jitter is still recorded, as jitter.
 const DISCONTINUITY_US = 20_000;  // cumulative |timestamp − expected| that counts as lost/inserted audio
 const CLOCK_JUMP_MS = 1_500;      // wall − mono disagreement that means "slept"
+const FED_SETTLE_MS = 150;        // input fed longer ago than this and still unencoded = swallowed by the encoder
 
 let session = null;
 const roles = new Map();
@@ -73,6 +74,7 @@ async function handle(msg) {
     case 'OPEN_SESSION':  return openSession(msg);
     case 'OPEN_ROLE':     return openRole(msg);
     case 'OPEN_SYNTH_ROLE': return openSynthRole(msg);
+    case 'SYNTH_DROP': { const r = roles.get(msg.role); if (r?.synthetic) { r.synthDropUntil = Date.now() + (msg.ms ?? 300); } return; }
     case 'REOPEN_ROLE':   return reopenRole(msg);
     case 'CLOSE_ROLE':    return closeRole(msg.role, msg.reason ?? 'closed');
     case 'PAUSE':         return setPaused(true, msg);
@@ -95,7 +97,7 @@ async function openSession({ sessionId, t0, opts = {}, settingsSnapshot = null }
   const jh = await jfh.createSyncAccessHandle();
   session = {
     id: sessionId, dir, journalHandle: jh, journalSize: jh.getSize(),
-    t0, opts: { flushIntervalMs: 1000, journalEnabled: true, fillGapsWithSilence: true, muxerGapFillMs: 40, ...opts },
+    t0, opts: { flushIntervalMs: 1000, journalEnabled: true, fillGapsWithSilence: true, muxerGapFillMs: 40, fillInputDrops: true, ...opts },
     settingsSnapshot,
     lastCheckpoint: null, checkpoints: 0, clockJumps: [],
     flushTimer: null, checkpointTimer: null,
@@ -146,7 +148,7 @@ async function openRole({ role, readable, encoder, expected = {}, muxer = {}, do
     silenceFilled48k: 0, gaps: [], paused: false, closed: false, ended: false, endedReason: null,
     openedWall: Date.now(), openedMono: performance.now(), opened: null,
     pageIntervalsMs: [], lastPageMono: null,
-    fillerPackets: 0, fillerSamples48k: 0, fillerEvents: 0,
+    fillerPackets: 0, fillerSamples48k: 0, fillerEvents: 0, dropFillSamples48k: 0, dropFillEvents: 0, fedLog: [],
   };
   roles.set(role, r);
   journal({ t: 'role_open', role, fileBytesAtOpen: r.fileBytes, expected, encoderRequest: encoder });
@@ -180,7 +182,7 @@ async function openSynthRole({ role, sampleRate, encoder }) {
     silenceFilled48k: 0, gaps: [], paused: false, closed: false, ended: false, endedReason: null,
     openedWall: Date.now(), openedMono: performance.now(), opened: null,
     pageIntervalsMs: [], lastPageMono: null, synthetic: true,
-    fillerPackets: 0, fillerSamples48k: 0, fillerEvents: 0,
+    fillerPackets: 0, fillerSamples48k: 0, fillerEvents: 0, dropFillSamples48k: 0, dropFillEvents: 0, fedLog: [],
   };
   roles.set(role, r);
   journal({ t: 'role_open', role, synthetic: true, sampleRate, encoderRequest: encoder });
@@ -191,6 +193,8 @@ async function openSynthRole({ role, sampleRate, encoder }) {
     const due = Math.floor((Date.now() - t0) / 1000 * sampleRate);
     const n = due - generated;
     if (n <= 0) return;
+    // Test hook: simulate an INPUT DROP — time passes, frames do not arrive (timestamp jumps).
+    if (r.synthDropUntil && Date.now() < r.synthDropUntil) { generated = due; return; }
     const buf = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       const tSec = (generated + i) / sampleRate;
@@ -222,6 +226,32 @@ async function reopenRole({ role, readable, gapMs = null }) {
   r.ended = false; r.endedReason = null;
   startReader(r, readable);
   self.postMessage({ type: 'ROLE_REOPENED', role, gapMs: gap, silenceFrames: filled });
+}
+
+/** Silence for a dropped-input gap: `n` frames at the input rate, timestamped BEFORE the frame that revealed the gap. */
+function feedDropSilence(r, n, nextTimestamp) {
+  const rate = r.sampleRate, ch = r.channels;
+  const step = Math.round(rate / 50);
+  let done = 0;
+  let ts = nextTimestamp - Math.round(n / rate * 1e6);
+  while (done < n) {
+    const k = Math.min(step, n - done);
+    const sil = new AudioData({ format: 'f32-planar', sampleRate: rate, numberOfFrames: k, numberOfChannels: ch,
+                                timestamp: ts, data: new Float32Array(k * ch) });
+    try { r.encoder.encode(sil); } finally { sil.close(); }
+    ts += Math.round(k / rate * 1e6);
+    done += k;
+  }
+  r.frames += n;                 // the timeline now contains these frames
+  noteFed(r);
+  r.dropFillSamples48k += Math.round(n * 48000 / rate);
+  r.dropFillEvents++;
+}
+
+/** Remember when each cumulative input position was handed to the encoder (bounded log). */
+function noteFed(r) {
+  r.fedLog.push({ mono: performance.now(), cum48k: Math.round(r.frames * 48000 / r.sampleRate) });
+  if (r.fedLog.length > 400) r.fedLog.splice(0, r.fedLog.length - 400);
 }
 
 function feedSilence(r, gapMs) {
@@ -283,6 +313,17 @@ async function onAudioData(r, ad) {
       if (r.firstDiscontinuities.length < 20) r.firstDiscontinuities.push({ atFrame: r.framesTotal, timestamp: ad.timestamp, deltaUs: dev, wall });
       journal({ t: 'discontinuity', role: r.role, atFrame: r.framesTotal, deltaUs: dev, timestamp: ad.timestamp });
       r.anchorTs = ad.timestamp; r.anchorFrames = r.framesTotal; // re-anchor after the jump
+      // Input DROP (timestamp ran ahead, frames did not): feed silence of the missing
+      // length so this asset stays aligned with the others. Measured 2026-09-07
+      // (accept-4h): 11 × 23 ms drops on the tab track = 268 ms between assets in 4 h.
+      // Jumps > 5 s are not filled here — that is a device loss / sleep, handled by
+      // the track policies and journaled.
+      if (session?.opts.fillInputDrops && r.encoder && !r.paused && dev > 0 && dev <= 5_000_000) {
+        const n = Math.round(dev / 1e6 * r.sampleRate);
+        const before48k = r.dropFillSamples48k;
+        feedDropSilence(r, n, ad.timestamp);
+        journal({ t: 'drop_filled', role: r.role, deltaUs: dev, frames: n, samples48k: r.dropFillSamples48k - before48k });
+      }
     }
     r.prevTs = ad.timestamp; r.prevFrames = ad.numberOfFrames;
     r.framesTotal += ad.numberOfFrames;
@@ -292,6 +333,7 @@ async function onAudioData(r, ad) {
 
     if (r.paused) { r.pausedFrames += ad.numberOfFrames; return; }
     r.frames += ad.numberOfFrames;
+    noteFed(r);
     if (r.downmixed) {
       const mono = downmixToMono(ad);
       try { r.encoder.encode(mono); } finally { mono.close(); }
@@ -411,7 +453,19 @@ function onChunk(r, chunk, meta) {
 function fillTimelineGap(r, tocSource, atEnd) {
   const fillMs = session?.opts.muxerGapFillMs ?? 0;
   if (!(fillMs > 0) || !r.muxer || !r.sampleRate) return 0;
-  const expected48k = Math.round(r.frames * 48000 / r.sampleRate) - (atEnd ? 0 : 960);
+  // Only input fed at least FED_SETTLE_MS ago counts: the encoder emits within ~20 ms, so
+  // anything older and still missing was swallowed (DTX). A burst fed just now (drop-fill
+  // silence, device-gap silence) must not be counted twice — measured 2026-09-07 (synthdrop):
+  // the first version filled a 300 ms drop with silence AND then again with 14 filler packets.
+  let expected48k;
+  if (atEnd) expected48k = Math.round(r.frames * 48000 / r.sampleRate);
+  else {
+    const cutoff = performance.now() - FED_SETTLE_MS;
+    let settled = null;
+    for (let i = r.fedLog.length - 1; i >= 0; i--) if (r.fedLog[i].mono <= cutoff) { settled = r.fedLog[i].cum48k; break; }
+    if (settled === null) return 0;
+    expected48k = settled;
+  }
   const position48k = r.muxer.granule + r.muxer.pendingSamples;
   const gap = expected48k - position48k;
   if (gap < fillMs * 48) return 0;
@@ -515,6 +569,7 @@ function roleStats(r) {
     silenceFilled48k: r.silenceFilled48k, gaps: r.gaps,
     fillerPackets: r.fillerPackets, fillerSamples48k: r.fillerSamples48k, fillerEvents: r.fillerEvents,
     fillerSec: round(r.fillerSamples48k / 48000, 3),
+    dropFillSamples48k: r.dropFillSamples48k, dropFillEvents: r.dropFillEvents, dropFillSec: round(r.dropFillSamples48k / 48000, 3),
     encoderRequested: r.encoderRequest, encoderApplied: r.encoderApplied, encoderSupported: r.encoderSupported,
     opusHead: r.opusHead, opusHeadSource: r.opusHeadSource,
     pageIntervalMs: summarize(r.pageIntervalsMs),

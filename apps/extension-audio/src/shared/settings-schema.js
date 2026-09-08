@@ -115,6 +115,19 @@ export const SETTINGS = [
     readback: null,
   },
   {
+    key: 'source.fillInputDropsWithSilence', group: 'source', type: 'bool', stage: 'experiment',
+    label: 'Заполнять пропуски входа тишиной (скачок timestamp без кадров)',
+    default: true,
+    why: 'Измерено 07.09.2026 (accept-4h, 4 ч): дорожка вкладки 11 раз потеряла по 23 мс (timestamp '
+       + 'AudioData прыгнул вперёд, кадров нет) — ассеты разошлись на 268 мс, хотя часы обоих источников '
+       + 'шли ровно. Заполнение пропуска тишиной той же длины держит local_mic и remote_tab на одной '
+       + 'шкале. Пропуски длиннее 5 с не заполняются (это уже потеря устройства/сон — см. onDeviceLost).',
+    risk: 'Выключение возвращает расхождение ассетов на суммарную длину пропусков; факт пропуска '
+        + 'остаётся только в журнале (discontinuity).',
+    decides: 'ADR-003',
+    readback: 'capture-report: roles.*.dropFillSamples48k, journal drop_filled',
+  },
+  {
     key: 'source.tabDownmixToMono', group: 'source', type: 'bool', stage: 'experiment',
     label: 'Звук вкладки сводить в моно перед кодированием',
     default: true,

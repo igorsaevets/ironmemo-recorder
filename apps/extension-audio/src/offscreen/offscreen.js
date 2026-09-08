@@ -493,6 +493,7 @@ async function startWebCodecs(applied) {
       journalEnabled: g('storage.journalEnabled', true),
       fillGapsWithSilence: g('source.onDeviceReturn', 'resume_fill_silence') === 'resume_fill_silence',
       muxerGapFillMs: g('storage.muxerGapFillMs', 40),
+      fillInputDrops: g('source.fillInputDropsWithSilence', true),
     },
     settingsSnapshot: g('experiment.forceProfileEveryRecording', true) ? state.settings : null,
   }, 'SESSION_OPENED');
@@ -761,6 +762,8 @@ function requestedVsApplied(final) {
     'source.produceMix': { applied: a.roles ? a.roles.includes('compatibility_mix') : null },
     'source.mixLayout': { applied: a.mix ? (a.mix.channelCount === 2 ? 'stereo_split' : 'mono_sum') : null, note: a.mix ? `dest.channelCount=${a.mix.channelCount}` : 'микс не создавался' },
     'source.tabAudioPassthrough': { applied: a.sources?.remote_tab ? !!a.passthroughConnected : null, note: a.sources?.remote_tab ? null : 'вкладка не захватывалась' },
+    'source.fillInputDropsWithSilence': { applied: state.engine === 'webcodecs' ? g('source.fillInputDropsWithSilence', true) : null,
+      note: state.engine === 'webcodecs' ? `заполнено пропусков входа по ролям, с: ${JSON.stringify(Object.fromEntries(Object.entries(rs).map(([k, v]) => [k, v.dropFillSec ?? 0])))}` : 'не применимо к MediaRecorder' },
     'source.tabDownmixToMono': { applied: a.sources?.remote_tab ? (rs.remote_tab?.downmixedToMono ?? state.roleApplied.remote_tab?.input?.downmixedToMono ?? null) : null,
       note: a.sources?.remote_tab ? `вход вкладки: ${rs.remote_tab?.inputChannels ?? state.roleApplied.remote_tab?.input?.channels ?? '—'} кан., энкодер: ${rs.remote_tab?.channels ?? '—'} кан.` : 'вкладка не захватывалась' },
     'source.micDeviceId': { applied: micApplied ? { deviceId: micApplied.deviceId, label: mic.label, match: mic.deviceResolution?.match } : null },
@@ -1000,6 +1003,12 @@ async function debugCommand({ what, role = 'local_mic', sampleRate = 44100 }) {
     case 'devicechange': {
       logEvent({ t: 'debug', what, note: 'simulated devicechange' });
       await onDeviceChange();
+      return { ok: true };
+    }
+    case 'synth_drop': {
+      if (!state.worker) return { ok: false, error: 'no worker' };
+      state.worker.postMessage({ type: 'SYNTH_DROP', role, ms: sampleRate });  // `sampleRate` field carries ms here
+      logEvent({ t: 'debug', what, role, ms: sampleRate });
       return { ok: true };
     }
     case 'memory': sampleMemory(); return { ok: true, sample: state.memSamples.at(-1) };
