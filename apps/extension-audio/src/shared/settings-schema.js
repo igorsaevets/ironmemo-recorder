@@ -41,7 +41,7 @@
  *   requires    условие показа: {key, equals|notEquals|includes}
  */
 
-export const SETTINGS_SCHEMA_VERSION = '0.3.0';
+export const SETTINGS_SCHEMA_VERSION = '0.4.0';
 
 export const GROUPS = [
   { id: 'source',     title: 'Источники звука',            order: 10 },
@@ -294,7 +294,7 @@ export const SETTINGS = [
   {
     key: 'audioEnc.impl', group: 'audioEnc', type: 'enum', stage: 'experiment',
     label: 'Движок кодирования',
-    default: 'mediarecorder',
+    default: 'webcodecs',
     options: [
       { value: 'mediarecorder', label: 'MediaRecorder', hint: 'просто, но контейнер закрывает браузер' },
       { value: 'webcodecs',     label: 'WebCodecs + свой muxer', hint: 'полный контроль над границами пакетов' },
@@ -322,7 +322,7 @@ export const SETTINGS = [
   {
     key: 'audioEnc.container', group: 'audioEnc', type: 'enum', stage: 'experiment',
     label: 'Контейнер',
-    default: 'webm',
+    default: 'ogg',
     options: [
       { value: 'webm', label: 'WebM' },
       { value: 'ogg',  label: 'Ogg', hint: 'нативный для Opus; в MediaRecorder Chrome его НЕТ, на пути WebCodecs пишем сами' },
@@ -525,7 +525,7 @@ export const SETTINGS = [
   },
   {
     key: 'storage.segmentStrategy', group: 'storage', type: 'enum', stage: 'experiment',
-    label: 'Стратегия сегментации', default: 'rolling_finalized',
+    label: 'Стратегия сегментации', default: 'webcodecs_muxed',
     options: [
       { value: 'continuous', label: 'Непрерывный MediaRecorder',
         hint: 'baseline', risk: 'Чанк из timeslice НЕ обязан быть самостоятельно воспроизводимым.' },

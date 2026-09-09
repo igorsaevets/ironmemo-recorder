@@ -102,6 +102,33 @@ const g = (path, fallback) =>
 
 const nowPair = () => ({ wall: Date.now(), mono: Math.round(performance.now() * 10) / 10 });
 
+async function pickEngine(impl) {
+  if (impl !== 'webcodecs') return 'mediarecorder';
+  const say = (info) => { state.engineFallback = info; report('info', { info }); };
+  if (typeof AudioEncoder === 'undefined' || typeof MediaStreamTrackProcessor === 'undefined') {
+    say('В этом браузере нет WebCodecs — записываем через MediaRecorder+WebM.');
+    return 'mediarecorder';
+  }
+  const cfg = {
+    codec: 'opus',
+    sampleRate: g('audioProc.sampleRate', 48000),
+    numberOfChannels: 1,
+    bitrate: g('audioEnc.bitrateKbps', 48) * 1000,
+    bitrateMode: g('audioEnc.bitrateMode', 'variable'),
+  };
+  try {
+    const r = await AudioEncoder.isConfigSupported(cfg);
+    if (!r?.supported) {
+      say('AudioEncoder Opus не принял конфигурацию — записываем через MediaRecorder+WebM.');
+      return 'mediarecorder';
+    }
+  } catch (e) {
+    say(`Проверка WebCodecs упала (${e?.message ?? e}) — записываем через MediaRecorder+WebM.`);
+    return 'mediarecorder';
+  }
+  return 'webcodecs';
+}
+
 /** Journal an event: in-memory (report) + worker journal (WC) or in-memory journal (MR). */
 function logEvent(entry) {
   const e = { ...nowPair(), tMs: state.startedAt == null ? null : Math.round(performance.now() - state.startedAt), ...entry };
@@ -164,7 +191,7 @@ async function start({ sessionId, streamId, settings, startTimings = null }) {
 
   const mode = g('source.mode', 'mic');
   const impl = g('audioEnc.impl', 'mediarecorder');
-  state.engine = impl === 'webcodecs' ? 'webcodecs' : 'mediarecorder';
+  state.engine = await pickEngine(impl);
   const applied = { requestedAt: state.timeline.t0Iso, sources: {}, engine: state.engine };
 
   // ── микрофон ──

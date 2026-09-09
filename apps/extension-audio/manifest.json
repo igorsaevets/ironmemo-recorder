@@ -1,16 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "IronMemo Audio Recorder (dev)",
-  "version": "0.1.0",
-  "description": "Локальная запись микрофона и звука вкладки. Стенд для замеров: кодеки, битрейты, сегментация, восстановление.",
+  "name": "IronMemo Audio Recorder",
+  "version": "0.2.0",
+  "description": "Локальная запись микрофона и звука вкладки для встреч и звонков. Работает при закрытой вкладке. Декодирует файл после сбоев Chrome.",
   "minimum_chrome_version": "116",
 
   "permissions": [
     "tabCapture",
     "offscreen",
     "storage",
-    "unlimitedStorage",
-    "activeTab"
+    "unlimitedStorage"
   ],
 
   "optional_permissions": [
@@ -21,8 +20,7 @@
 
   "optional_host_permissions": [
     "http://localhost/*",
-    "http://127.0.0.1/*",
-    "https://*/*"
+    "http://127.0.0.1/*"
   ],
 
   "background": {

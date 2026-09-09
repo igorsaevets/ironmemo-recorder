@@ -17,7 +17,7 @@ import {
 } from '../shared/audio-devices.js';
 
 let values = null;
-let stageFilter = 'all';
+let stageFilter = 'mvp';
 let audioDevices = { inputs: [], outputs: [], hasLabels: false };
 
 const $ = (id) => document.getElementById(id);
