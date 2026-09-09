@@ -8,8 +8,8 @@ let timerHandle = null;
 // Bumping the version key forces the overlay to reappear on the next popup open,
 // which is how Purple Nickel wants a change in data practices communicated.
 const CONSENT_KEY = 'ironmemo.consent.v1';
-const CONSENT_VERSION = 1;
-const CONSENT_TEXT_ID = 'ru-en-v1';
+const CONSENT_VERSION = 2;
+const CONSENT_TEXT_ID = 'ru-en-v2';
 
 // Живая волна микрофона в popup, чтобы юзер видел «звук приходит» и не получил пустой
 // файл, если mic заблокирован драйвером/системой (Kaspersky, audiosrv hang, mute).

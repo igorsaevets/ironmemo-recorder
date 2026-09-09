@@ -66,16 +66,20 @@ async function listSessions() {
         catch (e) { console.warn('[session-list] capture-report parse failed', sid, e); }
       }
       if (name === 'journal.jsonl') {
+        // Journal schema dualism: WebCodecs worker writes {t, wall, ...};
+        // MediaRecorder path writes {event, at, startWall, ...}. Both must be read.
         try {
           const text = await f.text();
           const lines = text.split('\n').filter(Boolean);
+          const wallOf = (j) => j.wall ?? j.at ?? j.startWall ?? null;
+          const isStop = (j) => j.t === 'session_stopped' || j.event === 'session_stopped';
           if (lines.length > 0) {
-            try { journalFirstWall = JSON.parse(lines[0]).wall ?? null; } catch {}
+            try { journalFirstWall = wallOf(JSON.parse(lines[0])); } catch {}
             for (let i = lines.length - 1; i >= 0; i--) {
               try {
                 const j = JSON.parse(lines[i]);
-                if (journalLastWall == null && j.wall != null) journalLastWall = j.wall;
-                if (j.t === 'session_stopped') journalStoppedSeen = true;
+                if (journalLastWall == null) journalLastWall = wallOf(j);
+                if (isStop(j)) journalStoppedSeen = true;
                 if (journalLastWall != null && journalStoppedSeen) break;
               } catch {}
             }
@@ -253,19 +257,31 @@ function renderRoleRow(role, g) {
     return row;
   }
 
-  // .part chunks — offer concatenated download. WebM containers written by MediaRecorder
-  // in `continuous` strategy concatenate to a valid stream (one EBML header at first chunk).
-  // `rolling_finalized` writes one EBML header per segment; chunks within one segment
-  // concatenate; across segments they are separate WebM streams. This UI concatenates ALL
-  // parts into a single .webm as a best-effort recovery — most players tolerate this,
-  // even for multi-segment streams (Chrome, VLC, ffmpeg).
+  // .part chunks — MediaRecorder path. Each `rolling_finalized` segment starts a NEW
+  // MediaRecorder → NEW EBML header, so cross-segment byte-concat = doubled headers
+  // (players do NOT reliably tolerate this). Group by segment (`<role>.<seg>.<seq>.part`),
+  // one download per segment. `continuous` writes a single segment → one download.
+  const bySegment = new Map();
+  for (const p of g.parts) {
+    const m = p.name.match(/\.(\d{3})\.\d{6}\.part$/);
+    const seg = m ? m[1] : '000';
+    if (!bySegment.has(seg)) bySegment.set(seg, []);
+    bySegment.get(seg).push(p);
+  }
+  const segments = [...bySegment.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   const totalBytes = g.parts.reduce((a, f) => a + f.size, 0);
+  const segNote = segments.length > 1
+    ? ` <span class="tag warn">${segments.length} сегм. × скачать по одному</span>`
+    : '';
+  const buttons = segments.map(([seg, parts]) => {
+    const sz = parts.reduce((a, f) => a + f.size, 0);
+    const suffix = segments.length > 1 ? ` #${seg}` : '';
+    return `<button class="btn" data-action="download-parts" data-role="${role}" data-segment="${seg}">Скачать${suffix} (${formatBytes(sz)})</button>`;
+  }).join(' ');
   row.innerHTML = `
-    <div class="role-name">${escapeHtml(label)} <span class="tag warn">${g.parts.length} фраг.</span></div>
+    <div class="role-name">${escapeHtml(label)} <span class="tag warn">${g.parts.length} фраг.</span>${segNote}</div>
     <div class="role-size">${formatBytes(totalBytes)}</div>
-    <div class="role-actions">
-      <button class="btn" data-action="download-parts" data-role="${role}">Скачать (собрать)</button>
-    </div>
+    <div class="role-actions">${buttons}</div>
   `;
   return row;
 }
@@ -293,15 +309,20 @@ async function handleAction(e, session, sessionEl) {
 
   if (action === 'download-parts') {
     const roleKey = btn.dataset.role;
-    const parts = session.groups[roleKey].parts;
+    const segment = btn.dataset.segment;
+    const parts = session.groups[roleKey].parts.filter((p) => {
+      const m = p.name.match(/\.(\d{3})\.\d{6}\.part$/);
+      return (m ? m[1] : '000') === segment;
+    });
+    const original = btn.textContent;
     btn.disabled = true; btn.textContent = 'Сборка…';
     try {
-      await downloadParts(session.sid, roleKey, parts, session.startedAt);
+      await downloadParts(session.sid, roleKey, segment, parts, session.startedAt);
       btn.textContent = 'Готово';
-      setTimeout(() => { btn.disabled = false; btn.textContent = 'Скачать (собрать)'; }, 1200);
+      setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1200);
     } catch (err) {
       showStatus(`Сборка не удалась: ${err.message ?? err}`, 'error');
-      btn.disabled = false; btn.textContent = 'Скачать (собрать)';
+      btn.disabled = false; btn.textContent = original;
     }
     return;
   }
@@ -345,13 +366,16 @@ async function downloadFile(sid, name, roleKey, ext, startedAt) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-async function downloadParts(sid, roleKey, parts, startedAt) {
+async function downloadParts(sid, roleKey, segment, parts, startedAt) {
   const root = await navigator.storage.getDirectory();
   const sessionsDir = await root.getDirectoryHandle('sessions');
   const dh = await sessionsDir.getDirectoryHandle(sid);
 
+  // Parts within one segment concatenate to a valid WebM (single EBML header
+  // in the first timeslice; subsequent chunks are continuation clusters).
+  const ordered = [...parts].sort((a, b) => a.name.localeCompare(b.name));
   const blobs = [];
-  for (const p of parts) {
+  for (const p of ordered) {
     const fh = await dh.getFileHandle(p.name);
     const f = await fh.getFile();
     blobs.push(f);
@@ -360,7 +384,8 @@ async function downloadParts(sid, roleKey, parts, startedAt) {
 
   const dateStr = startedAt ? new Date(startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-') : 'unknown';
   const roleSlug = ROLE_SLUG[roleKey] ?? roleKey;
-  const filename = `IronMemo-${dateStr}-${roleSlug}-assembled.webm`;
+  const segSuffix = segment && segment !== '000' ? `-seg${segment}` : '';
+  const filename = `IronMemo-${dateStr}-${roleSlug}${segSuffix}.webm`;
 
   const url = URL.createObjectURL(combined);
   const a = document.createElement('a');
