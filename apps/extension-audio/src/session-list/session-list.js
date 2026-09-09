@@ -1,9 +1,17 @@
-// Список сессий в OPFS: чтение напрямую (не через service worker — он эфемерен), download
-// через <a download> (не требует permission), delete через removeEntry({recursive:true}).
-// Читается тот же путь, что пишет capture-worker: sessions/<sessionId>/{local_mic,remote_tab,
-// compatibility_mix}.opus + capture-report.json + journal.jsonl.
+// Session list: reads OPFS directly (SW is ephemeral, no round-trip needed).
+// Downloads via <a download> — DOM standard, no chrome.downloads permission needed.
+// Delete via removeEntry({recursive:true}).
+//
+// v0.3.1 (2026-09-09): defensive filename detection.
+// v0.3.0 shipped with regex /\.(opus|webm)$/ that missed two engines:
+//   - MediaRecorder fallback → <role>.NNN.NNNNNN.part (rolling_finalized chunks)
+//   - Recovery finalize     → <role>.recovered.opus
+// Both are legitimate outputs; the user cannot tell which one their Chrome ran.
+// Now: prefer ready file → recovered file → concatenated parts.
 
 const $ = (id) => document.getElementById(id);
+
+const ROLES = ['compatibility_mix', 'local_mic', 'remote_tab']; // longest-first for prefix matching
 
 const ROLE_LABEL = {
   local_mic: 'Микрофон',
@@ -11,13 +19,16 @@ const ROLE_LABEL = {
   compatibility_mix: 'Микс (mic+tab)',
 };
 
-// Латинский slug для имени файла на диске — Cyrillic в имени скачанного файла
-// на Windows и части Linux даёт непредсказуемое поведение (см. CLAUDE.md).
+// Latin slug in downloaded filenames. Cyrillic in Windows Downloads
+// filenames gives unpredictable behavior (CLAUDE.md rule).
 const ROLE_SLUG = {
   local_mic: 'mic',
   remote_tab: 'tab',
   compatibility_mix: 'mix',
 };
+
+// Opus @ 48 kbps ≈ 6 kB/s per role → used only as a last-resort duration fallback.
+const BYTES_PER_SEC_PER_ROLE = 6000;
 
 boot().catch((e) => showStatus(`Не удалось загрузить список: ${e?.message ?? e}`, 'error'));
 
@@ -40,26 +51,73 @@ async function listSessions() {
   const out = [];
   for await (const [sid, dh] of sessionsDir.entries()) {
     if (dh.kind !== 'directory') continue;
+
     const files = [];
     let report = null;
+    let journalFirstWall = null, journalLastWall = null, journalStoppedSeen = false;
+
     for await (const [name, fh] of dh.entries()) {
       if (fh.kind !== 'file') continue;
       const f = await fh.getFile();
       files.push({ name, size: f.size, lastModified: f.lastModified });
+
       if (name === 'capture-report.json') {
-        try { report = JSON.parse(await f.text()); } catch { /* corrupt report — treat as no report */ }
+        try { report = JSON.parse(await f.text()); }
+        catch (e) { console.warn('[session-list] capture-report parse failed', sid, e); }
+      }
+      if (name === 'journal.jsonl') {
+        try {
+          const text = await f.text();
+          const lines = text.split('\n').filter(Boolean);
+          if (lines.length > 0) {
+            try { journalFirstWall = JSON.parse(lines[0]).wall ?? null; } catch {}
+            for (let i = lines.length - 1; i >= 0; i--) {
+              try {
+                const j = JSON.parse(lines[i]);
+                if (journalLastWall == null && j.wall != null) journalLastWall = j.wall;
+                if (j.t === 'session_stopped') journalStoppedSeen = true;
+                if (journalLastWall != null && journalStoppedSeen) break;
+              } catch {}
+            }
+          }
+        } catch (e) { console.warn('[session-list] journal read failed', sid, e); }
       }
     }
+
+    // Group files by role, by kind
+    const groups = Object.fromEntries(ROLES.map((r) => [r, { ready: [], recovered: [], parts: [] }]));
+    const otherFiles = [];
+    for (const f of files) {
+      let matched = false;
+      for (const role of ROLES) {
+        if (f.name === `${role}.opus` || f.name === `${role}.webm`) { groups[role].ready.push(f); matched = true; break; }
+        if (f.name === `${role}.recovered.opus` || f.name === `${role}.recovered.webm`) { groups[role].recovered.push(f); matched = true; break; }
+        // MediaRecorder rolling_finalized: <role>.<seg>.<seq>.part
+        // MediaRecorder continuous:       <role>.000.NNNNNN.part
+        if (f.name.startsWith(`${role}.`) && f.name.endsWith('.part')) { groups[role].parts.push(f); matched = true; break; }
+      }
+      if (!matched && f.name !== 'capture-report.json' && f.name !== 'journal.jsonl') otherFiles.push(f);
+    }
+
+    // Sort .part chunks by segment/seq
+    for (const role of ROLES) {
+      groups[role].parts.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
     const bytes = files.reduce((a, f) => a + f.size, 0);
-    const roleFiles = files.filter((f) => /\.(opus|webm)$/.test(f.name));
-    // Startedat: capture-report.openedWall берётся первым; иначе — самый ранний lastModified
-    // из файлов роли (журнал пишется с самой первой записи).
-    const startedAt = report?.openedWall
-      ?? Math.min(...files.filter((f) => f.name === 'journal.jsonl').map((f) => f.lastModified), Infinity)
-      ?? files[0]?.lastModified
+
+    // startedAt: report.timeline.t0Wall (v2 report) → journal first line wall → earliest file mtime
+    const startedAt = report?.timeline?.t0Wall
+      ?? report?.openedWall    // legacy field, in case some old report has it
+      ?? journalFirstWall
+      ?? Math.min(...files.map((f) => f.lastModified).filter(Number.isFinite))
       ?? null;
-    // Duration: наибольшее mediaSec среди ролей — все роли пишутся одновременно, но при
-    // разных audio-context'ах могут разойтись на десятки мс; берём максимум как «сколько шло».
+
+    // durationSec (in priority order):
+    // 1) report.roles[*].mediaSec (max across roles) — best, comes from encoder frames
+    // 2) journal last-line wall − first-line wall
+    // 3) (max file mtime − startedAt) / 1000
+    // 4) bytes / (BYTES_PER_SEC_PER_ROLE × numRolesWithData) — very rough
     let durationSec = null;
     if (report?.roles) {
       for (const stats of Object.values(report.roles)) {
@@ -67,11 +125,26 @@ async function listSessions() {
         if (typeof d === 'number' && (durationSec == null || d > durationSec)) durationSec = d;
       }
     }
-    if (durationSec == null && report?.openedWall && report?.stopWall) {
-      durationSec = (report.stopWall - report.openedWall) / 1000;
+    if (durationSec == null && journalFirstWall != null && journalLastWall != null && journalLastWall > journalFirstWall) {
+      durationSec = (journalLastWall - journalFirstWall) / 1000;
     }
-    const status = report?.final === true ? 'ok' : 'orphan';
-    out.push({ sid, bytes, files, roleFiles, startedAt, durationSec, status, report });
+    if (durationSec == null && startedAt != null) {
+      const lastMtime = Math.max(...files.map((f) => f.lastModified).filter(Number.isFinite));
+      if (Number.isFinite(lastMtime) && lastMtime > startedAt) durationSec = (lastMtime - startedAt) / 1000;
+    }
+    if (durationSec == null) {
+      const rolesWithData = ROLES.filter((r) =>
+        groups[r].ready.length + groups[r].recovered.length + groups[r].parts.length > 0
+      ).length;
+      if (rolesWithData > 0) durationSec = bytes / (BYTES_PER_SEC_PER_ROLE * rolesWithData);
+    }
+
+    // Status: capture-report.final:true → штатно, else журнал session_stopped → штатно, else orphan
+    const status = (report?.final === true || journalStoppedSeen) ? 'ok' : 'orphan';
+
+    const engine = report?.engine ?? null;
+
+    out.push({ sid, bytes, files, groups, otherFiles, startedAt, durationSec, status, engine, report });
   }
 
   out.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
@@ -101,11 +174,12 @@ function renderSession(s) {
   const badge = s.status === 'ok'
     ? '<span class="pill ok">Завершена штатно</span>'
     : '<span class="pill orphan">Прервана без остановки</span>';
+  const engineTag = s.engine ? `<span class="tag">${escapeHtml(s.engine)}</span>` : '';
 
   el.innerHTML = `
     <div class="session-head">
       <div>
-        <div class="session-date">${dateStr}${badge}</div>
+        <div class="session-date">${dateStr}${badge}${engineTag}</div>
         <div class="session-meta">Длительность: ${duration} · На диске: ${formatBytes(s.bytes)}</div>
       </div>
       <div class="session-id">${s.sid.slice(0, 8)}…</div>
@@ -117,28 +191,83 @@ function renderSession(s) {
   `;
 
   const rolesEl = el.querySelector('.roles');
-  if (!s.roleFiles.length) {
-    rolesEl.innerHTML = '<div class="session-meta" style="padding:8px 4px">Файлов роли нет (только служебные).</div>';
-  } else {
-    for (const f of s.roleFiles) {
-      const roleKey = f.name.replace(/\.(opus|webm)$/, '');
-      const label = ROLE_LABEL[roleKey] ?? roleKey;
-      const ext = f.name.match(/\.(opus|webm)$/)?.[1] ?? 'bin';
-      const row = document.createElement('div');
-      row.className = 'role-row';
-      row.innerHTML = `
-        <div class="role-name">${escapeHtml(label)}</div>
-        <div class="role-size">${formatBytes(f.size)}</div>
-        <div class="role-actions">
-          <button class="btn" data-action="download" data-role="${escapeHtml(roleKey)}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">Скачать</button>
-        </div>
-      `;
-      rolesEl.appendChild(row);
-    }
+  let anyRole = false;
+  for (const role of ROLES) {
+    const g = s.groups[role];
+    const row = renderRoleRow(role, g);
+    if (row) { rolesEl.appendChild(row); anyRole = true; }
+  }
+  if (!anyRole) {
+    const files = s.files.map((f) => `${escapeHtml(f.name)} (${formatBytes(f.size)})`).join(', ');
+    rolesEl.innerHTML = `<div class="session-meta" style="padding:8px 4px">Роль-файлы не найдены. Все файлы в сессии: ${files || '(пусто)'}.</div>`;
+  }
+  if (s.otherFiles.length) {
+    const rest = s.otherFiles.map((f) => `${escapeHtml(f.name)} (${formatBytes(f.size)})`).join(', ');
+    const note = document.createElement('div');
+    note.className = 'session-meta';
+    note.style.padding = '4px';
+    note.textContent = `Прочие файлы: ${rest}`;
+    rolesEl.appendChild(note);
   }
 
   el.addEventListener('click', (e) => handleAction(e, s, el));
   return el;
+}
+
+/**
+ * One row per role. Priority for the download:
+ *   1. `<role>.opus` / `<role>.webm` — normal
+ *   2. `<role>.recovered.opus` — after recovery
+ *   3. concatenated `.part` chunks — MediaRecorder fallback, best-effort
+ */
+function renderRoleRow(role, g) {
+  const label = ROLE_LABEL[role] ?? role;
+  if (g.ready.length === 0 && g.recovered.length === 0 && g.parts.length === 0) return null;
+
+  const row = document.createElement('div');
+  row.className = 'role-row';
+
+  if (g.ready.length > 0) {
+    const f = g.ready[0];
+    const ext = f.name.match(/\.(opus|webm)$/)?.[1] ?? 'bin';
+    row.innerHTML = `
+      <div class="role-name">${escapeHtml(label)}</div>
+      <div class="role-size">${formatBytes(f.size)}</div>
+      <div class="role-actions">
+        <button class="btn" data-action="download-file" data-role="${role}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">Скачать</button>
+      </div>
+    `;
+    return row;
+  }
+
+  if (g.recovered.length > 0) {
+    const f = g.recovered[0];
+    const ext = f.name.match(/\.(opus|webm)$/)?.[1] ?? 'opus';
+    row.innerHTML = `
+      <div class="role-name">${escapeHtml(label)} <span class="tag warn">восстановлено</span></div>
+      <div class="role-size">${formatBytes(f.size)}</div>
+      <div class="role-actions">
+        <button class="btn" data-action="download-file" data-role="${role}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">Скачать</button>
+      </div>
+    `;
+    return row;
+  }
+
+  // .part chunks — offer concatenated download. WebM containers written by MediaRecorder
+  // in `continuous` strategy concatenate to a valid stream (one EBML header at first chunk).
+  // `rolling_finalized` writes one EBML header per segment; chunks within one segment
+  // concatenate; across segments they are separate WebM streams. This UI concatenates ALL
+  // parts into a single .webm as a best-effort recovery — most players tolerate this,
+  // even for multi-segment streams (Chrome, VLC, ffmpeg).
+  const totalBytes = g.parts.reduce((a, f) => a + f.size, 0);
+  row.innerHTML = `
+    <div class="role-name">${escapeHtml(label)} <span class="tag warn">${g.parts.length} фраг.</span></div>
+    <div class="role-size">${formatBytes(totalBytes)}</div>
+    <div class="role-actions">
+      <button class="btn" data-action="download-parts" data-role="${role}">Скачать (собрать)</button>
+    </div>
+  `;
+  return row;
 }
 
 async function handleAction(e, session, sessionEl) {
@@ -146,7 +275,7 @@ async function handleAction(e, session, sessionEl) {
   if (!btn) return;
   const action = btn.dataset.action;
 
-  if (action === 'download') {
+  if (action === 'download-file') {
     const file = btn.dataset.file;
     const roleKey = btn.dataset.role;
     const ext = btn.dataset.ext;
@@ -158,6 +287,21 @@ async function handleAction(e, session, sessionEl) {
     } catch (err) {
       showStatus(`Скачивание не удалось: ${err.message ?? err}`, 'error');
       btn.disabled = false; btn.textContent = 'Скачать';
+    }
+    return;
+  }
+
+  if (action === 'download-parts') {
+    const roleKey = btn.dataset.role;
+    const parts = session.groups[roleKey].parts;
+    btn.disabled = true; btn.textContent = 'Сборка…';
+    try {
+      await downloadParts(session.sid, roleKey, parts, session.startedAt);
+      btn.textContent = 'Готово';
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Скачать (собрать)'; }, 1200);
+    } catch (err) {
+      showStatus(`Сборка не удалась: ${err.message ?? err}`, 'error');
+      btn.disabled = false; btn.textContent = 'Скачать (собрать)';
     }
     return;
   }
@@ -189,7 +333,8 @@ async function downloadFile(sid, name, roleKey, ext, startedAt) {
 
   const dateStr = startedAt ? new Date(startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-') : 'unknown';
   const roleSlug = ROLE_SLUG[roleKey] ?? roleKey;
-  const filename = `IronMemo-${dateStr}-${roleSlug}.${ext}`;
+  const suffix = name.includes('.recovered.') ? '-recovered' : '';
+  const filename = `IronMemo-${dateStr}-${roleSlug}${suffix}.${ext}`;
 
   const url = URL.createObjectURL(file);
   const a = document.createElement('a');
@@ -197,7 +342,32 @@ async function downloadFile(sid, name, roleKey, ext, startedAt) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  // Оставляем URL живым 60с, чтобы browser dialog успел сохранить, потом освобождаем.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+async function downloadParts(sid, roleKey, parts, startedAt) {
+  const root = await navigator.storage.getDirectory();
+  const sessionsDir = await root.getDirectoryHandle('sessions');
+  const dh = await sessionsDir.getDirectoryHandle(sid);
+
+  const blobs = [];
+  for (const p of parts) {
+    const fh = await dh.getFileHandle(p.name);
+    const f = await fh.getFile();
+    blobs.push(f);
+  }
+  const combined = new Blob(blobs, { type: 'audio/webm' });
+
+  const dateStr = startedAt ? new Date(startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-') : 'unknown';
+  const roleSlug = ROLE_SLUG[roleKey] ?? roleKey;
+  const filename = `IronMemo-${dateStr}-${roleSlug}-assembled.webm`;
+
+  const url = URL.createObjectURL(combined);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 

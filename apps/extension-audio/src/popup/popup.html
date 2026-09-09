@@ -5,6 +5,23 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
+  <div id="consent" class="consent" hidden>
+    <h2>О расширении IronMemo</h2>
+    <p>IronMemo записывает звук микрофона и вкладок <b>локально в вашем браузере</b>. Записи хранятся <b>только на вашем устройстве</b>. IronMemo ничего не отправляет на сервер без вашего явного запроса. Расширение не читает содержимое сайтов и не использует ИИ на ваших записях.</p>
+    <p>Начиная запись, вы подтверждаете, что имеете право записывать всех участников встречи в вашей юрисдикции.</p>
+    <label class="check">
+      <input type="checkbox" id="consentAgree">
+      <span>Я согласен и продолжаю</span>
+    </label>
+    <button id="consentContinue" class="btn primary" disabled>Продолжить</button>
+    <details class="en">
+      <summary>English</summary>
+      <p>IronMemo records microphone and tab audio <b>locally in your browser</b>. Recordings are stored <b>only on your device</b>. IronMemo does not send anything to a server without your explicit request. The extension does not read website content and does not run AI on your recordings.</p>
+      <p>By starting a recording, you confirm you have the right to record all meeting participants under the law of your jurisdiction.</p>
+    </details>
+  </div>
+
+  <div id="app" hidden>
   <div class="head">
     <span class="dot" id="stateDot"></span>
     <div>
@@ -35,6 +52,7 @@
   <div class="foot">
     <a href="#" id="openOptions">Настройки</a>
     <a href="#" id="openLab">Диагностика</a>
+  </div>
   </div>
 
   <script type="module" src="popup.js"></script>

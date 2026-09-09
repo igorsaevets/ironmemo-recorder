@@ -4,12 +4,57 @@ import { getByPath, estimateMBPerHour } from '../shared/settings-schema.js';
 const $ = (id) => document.getElementById(id);
 let timerHandle = null;
 
+// CWS Purple Nickel: prominent disclosure BEFORE first data collection. C7 in checklist.
+// Bumping the version key forces the overlay to reappear on the next popup open,
+// which is how Purple Nickel wants a change in data practices communicated.
+const CONSENT_KEY = 'ironmemo.consent.v1';
+const CONSENT_VERSION = 1;
+const CONSENT_TEXT_ID = 'ru-en-v1';
+
 // Живая волна микрофона в popup, чтобы юзер видел «звук приходит» и не получил пустой
 // файл, если mic заблокирован драйвером/системой (Kaspersky, audiosrv hang, mute).
 // Второй getUserMedia в popup — Chrome шарит mic между контекстами одного origin.
 const WAVE = { stream: null, ctx: null, an: null, raf: 0, starting: false, err: null };
 
-init();
+boot().catch((e) => console.error('[popup] boot failed', e));
+
+async function boot() {
+  const consent = await getConsent();
+  if (!consent || consent.version !== CONSENT_VERSION) {
+    showConsent();
+    return;
+  }
+  $('app').hidden = false;
+  await init();
+}
+
+async function getConsent() {
+  try {
+    const r = await chrome.storage.local.get(CONSENT_KEY);
+    return r[CONSENT_KEY] ?? null;
+  } catch { return null; }
+}
+
+function showConsent() {
+  $('consent').hidden = false;
+  const check = $('consentAgree');
+  const btn = $('consentContinue');
+  check.addEventListener('change', () => { btn.disabled = !check.checked; });
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      await chrome.storage.local.set({
+        [CONSENT_KEY]: { version: CONSENT_VERSION, textShown: CONSENT_TEXT_ID, acceptedAt: Date.now() },
+      });
+      $('consent').hidden = true;
+      $('app').hidden = false;
+      await init();
+    } catch (e) {
+      btn.disabled = false;
+      console.error('[popup] consent save failed', e);
+    }
+  });
+}
 
 async function init() {
   // Boot probe (B3): the first GET_STATE is what wakes the service worker when the
