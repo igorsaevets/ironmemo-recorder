@@ -100,7 +100,7 @@ async function listSessions() {
         // MediaRecorder continuous:       <role>.000.NNNNNN.part
         if (f.name.startsWith(`${role}.`) && f.name.endsWith('.part')) { groups[role].parts.push(f); matched = true; break; }
       }
-      if (!matched && f.name !== 'capture-report.json' && f.name !== 'journal.jsonl') otherFiles.push(f);
+      if (!matched && f.name !== 'capture-report.json' && f.name !== 'journal.jsonl' && f.name !== 'recovery.json') otherFiles.push(f);
     }
 
     // Sort .part chunks by segment/seq
