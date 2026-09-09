@@ -212,23 +212,61 @@ async function deleteSession(session) {
   return true;
 }
 
+/** Run one recovery-worker request from this page (same code path as the offscreen document). */
+function recoveryRequest(msg) {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL('../offscreen/recovery-worker.js', import.meta.url), { type: 'module' });
+    const timer = setTimeout(() => { w.terminate(); reject(new Error('recovery-worker timeout')); }, 600_000);
+    w.onmessage = (e) => { clearTimeout(timer); w.terminate(); resolve(e.data); };
+    w.onerror = (e) => { clearTimeout(timer); w.terminate(); reject(new Error(e.message)); };
+    w.postMessage(msg);
+  });
+}
+
+/** Sessions with their orphan status (capture-report final flag + journal). */
+async function scanSessions() {
+  const r = await recoveryRequest({ type: 'SCAN' });
+  if (!r.ok) throw new Error(r.error);
+  return r.sessions;
+}
+
+/** Check (and, by default, finalize/remux) one interrupted session; returns recovery.json content. */
+async function recoverSession(session, opts = {}) {
+  const r = await recoveryRequest({ type: 'RECOVER', sessionId: session, opts: { remux: true, validate: true, ...opts } });
+  if (!r.ok) throw new Error(r.error);
+  return { ...r.result, logs: r.logs };
+}
+
 async function renderSessions() {
   const box = $('sessions');
   const list = await listSessions();
   if (!list.length) { box.innerHTML = '<p class="muted">Сессий нет.</p>'; return; }
+  let status = new Map();
+  try { status = new Map((await scanSessions()).map((s) => [s.session, s])); } catch { /* worker unavailable: plain list */ }
   box.innerHTML = '';
   for (const s of list) {
+    const st = status.get(s.session);
+    const badge = !st ? '' : st.orphaned
+      ? `<span class="pill low">прервана без остановки${st.recoveredAt ? ', проверена' : ''}</span>`
+      : '<span class="pill high">завершена штатно</span>';
     const div = document.createElement('div');
     div.className = 'session';
-    div.innerHTML = `<h3 style="margin:14px 0 4px"><code>${esc(s.session)}</code> — ${(s.bytes / 1048576).toFixed(1)} МБ</h3>`
+    div.innerHTML = `<h3 style="margin:14px 0 4px"><code>${esc(s.session)}</code> — ${(s.bytes / 1048576).toFixed(1)} МБ ${badge}</h3>`
       + table(['Файл', 'Байт', 'Изменён', ''], s.files.map((f) => [
           esc(f.name), f.size.toLocaleString('ru-RU'), new Date(f.lastModified).toLocaleTimeString('ru-RU'),
           `<a href="#" data-dl="${esc(s.session)}|${esc(f.name)}">скачать</a>`]))
       + `<p><button class="btn" data-decode="${esc(s.session)}">Проверить декодированием (все .opus)</button>
+            ${st?.orphaned ? `<button class="btn" data-recover="${esc(s.session)}">Проверить и завершить прерванную запись</button>` : ''}
             <button class="btn ghost" data-del="${esc(s.session)}">Удалить сессию</button></p>
          <pre class="decode-result" hidden></pre>`;
     box.appendChild(div);
   }
+  box.querySelectorAll('button[data-recover]').forEach((b) => b.addEventListener('click', async () => {
+    const pre = b.parentElement.nextElementSibling; pre.hidden = false; pre.textContent = 'Проверяю…';
+    try { pre.textContent = JSON.stringify(await recoverSession(b.dataset.recover), null, 2); }
+    catch (e) { pre.textContent = `Ошибка: ${e.message}`; }
+    renderSessions();
+  }));
   box.querySelectorAll('a[data-dl]').forEach((a) => a.addEventListener('click', (e) => {
     e.preventDefault(); const [sid, name] = a.dataset.dl.split('|'); downloadFile(sid, name);
   }));
@@ -244,4 +282,4 @@ async function renderSessions() {
 }
 
 // Test-bench API (Playwright): window.ironmemoLab.*
-window.ironmemoLab = { listSessions, downloadFile, decodeSession, deleteSession, demuxOggOpus, getFile };
+window.ironmemoLab = { listSessions, downloadFile, decodeSession, deleteSession, demuxOggOpus, getFile, scanSessions, recoverSession };

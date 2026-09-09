@@ -58,6 +58,13 @@ const JOURNAL_EVERY_PAGES = 5;    // one journal line per N pages per role
 const DISCONTINUITY_US = 20_000;  // cumulative |timestamp − expected| that counts as lost/inserted audio
 const CLOCK_JUMP_MS = 1_500;      // wall − mono disagreement that means "slept"
 const FED_SETTLE_MS = 150;        // input fed longer ago than this and still unencoded = swallowed by the encoder
+// Frozen input (I2): a role whose track is still `live` but delivers no AudioData. Seen for real on
+// 2026-09-07 when the Windows Audio service hung (long-4h/journal.jsonl): the mix froze for good,
+// the status stayed `recording`. Checked every second against `source.frozenInputTimeoutMs`.
+// When frames come back, the gap is filled with silence up to FROZEN_FILL_MAX_MS so the assets
+// stay on one timeline (a plain timestamp jump is only filled up to 5 s — see onAudioData).
+const FROZEN_CHECK_MS = 1_000;
+const FROZEN_FILL_MAX_MS = 600_000;
 
 let session = null;
 const roles = new Map();
@@ -75,6 +82,15 @@ async function handle(msg) {
     case 'OPEN_ROLE':     return openRole(msg);
     case 'OPEN_SYNTH_ROLE': return openSynthRole(msg);
     case 'SYNTH_DROP': { const r = roles.get(msg.role); if (r?.synthetic) { r.synthDropUntil = Date.now() + (msg.ms ?? 300); } return; }
+    case 'FREEZE_INPUT': {
+      // Test hook (I2): drop every AudioData of the role for `ms` — from the pipeline's point of
+      // view this is exactly "track live, no frames" (the audiosrv hang), without touching a device.
+      const r = roles.get(msg.role);
+      if (!r) throw new Error(`FREEZE_INPUT: unknown role ${msg.role}`);
+      r.freezeUntil = performance.now() + (msg.ms ?? 5000);
+      journal({ t: 'debug_freeze_input', role: msg.role, ms: msg.ms ?? 5000 });
+      return;
+    }
     case 'REOPEN_ROLE':   return reopenRole(msg);
     case 'CLOSE_ROLE':    return closeRole(msg.role, msg.reason ?? 'closed');
     case 'PAUSE':         return setPaused(true, msg);
@@ -97,16 +113,19 @@ async function openSession({ sessionId, t0, opts = {}, settingsSnapshot = null }
   const jh = await jfh.createSyncAccessHandle();
   session = {
     id: sessionId, dir, journalHandle: jh, journalSize: jh.getSize(),
-    t0, opts: { flushIntervalMs: 1000, journalEnabled: true, fillGapsWithSilence: true, muxerGapFillMs: 40, fillInputDrops: true, ...opts },
+    t0, opts: { flushIntervalMs: 1000, journalEnabled: true, fillGapsWithSilence: true, muxerGapFillMs: 40, fillInputDrops: true,
+                frozenInputTimeoutMs: 3000, ...opts },
     settingsSnapshot,
     lastCheckpoint: null, checkpoints: 0, clockJumps: [],
-    flushTimer: null, checkpointTimer: null,
+    flushTimer: null, checkpointTimer: null, frozenTimer: null,
     openedWall: Date.now(), openedMono: performance.now(),
+    fatal: null, journalFailed: false,
   };
   journal({ t: 'session_open', sessionId, t0, opts: session.opts, workerTimeOrigin: performance.timeOrigin });
   session.flushTimer = setInterval(() => { for (const r of roles.values()) flushRole(r).catch(reportErr(r.role)); },
                                    session.opts.flushIntervalMs);
   session.checkpointTimer = setInterval(checkpoint, CHECKPOINT_MS);
+  session.frozenTimer = setInterval(frozenCheck, FROZEN_CHECK_MS);
   self.postMessage({ type: 'SESSION_OPENED', ok: true, sessionId });
 }
 
@@ -121,7 +140,29 @@ function journal(entry) {
     session.journalSize += bytes.length;
     session.journalHandle.flush();
   } catch (e) {
-    self.postMessage({ type: 'ERROR', error: `journal: ${String(e?.message ?? e)}` });
+    // Report once: a full disk makes every line fail, and the ERROR channel must not
+    // drown the FATAL that follows from the media write.
+    if (!session.journalFailed) {
+      session.journalFailed = true;
+      self.postMessage({ type: 'ERROR', error: `journal: ${String(e?.message ?? e)}` });
+    }
+  }
+}
+
+/**
+ * A media write failed (quota exceeded, disk full, handle gone). Recording cannot continue
+ * honestly: the page is lost and every next page would be too. Report once, let the
+ * offscreen document stop the session; finalizeRole() keeps whatever is on disk.
+ * First version (I1) only posted ERROR and went on — the file silently stopped growing
+ * while the status said `recording`. That is the failure ADR-004 must never allow.
+ */
+function fatal(r, e, during) {
+  const name = e?.name ?? 'Error';
+  const entry = { role: r?.role ?? null, name, error: String(e?.message ?? e), during, fileBytes: r?.fileBytes ?? null, wall: Date.now() };
+  journal({ t: 'write_failed', ...entry });
+  if (session && !session.fatal) {
+    session.fatal = entry;
+    self.postMessage({ type: 'FATAL', ...entry });
   }
 }
 
@@ -149,6 +190,8 @@ async function openRole({ role, readable, encoder, expected = {}, muxer = {}, do
     openedWall: Date.now(), openedMono: performance.now(), opened: null,
     pageIntervalsMs: [], lastPageMono: null,
     fillerPackets: 0, fillerSamples48k: 0, fillerEvents: 0, dropFillSamples48k: 0, dropFillEvents: 0, fedLog: [],
+    frozen: false, frozenSinceMono: null, frozenEvents: 0, frozenTotalMs: 0, frozenFillSamples48k: 0, freezeUntil: null, writeFailed: false,
+    stopRequested: false, readerDone: null,
   };
   roles.set(role, r);
   journal({ t: 'role_open', role, fileBytesAtOpen: r.fileBytes, expected, encoderRequest: encoder });
@@ -183,6 +226,8 @@ async function openSynthRole({ role, sampleRate, encoder }) {
     openedWall: Date.now(), openedMono: performance.now(), opened: null,
     pageIntervalsMs: [], lastPageMono: null, synthetic: true,
     fillerPackets: 0, fillerSamples48k: 0, fillerEvents: 0, dropFillSamples48k: 0, dropFillEvents: 0, fedLog: [],
+    frozen: false, frozenSinceMono: null, frozenEvents: 0, frozenTotalMs: 0, frozenFillSamples48k: 0, freezeUntil: null, writeFailed: false,
+    stopRequested: false, readerDone: null,
   };
   roles.set(role, r);
   journal({ t: 'role_open', role, synthetic: true, sampleRate, encoderRequest: encoder });
@@ -275,7 +320,7 @@ function feedSilence(r, gapMs) {
 
 function startReader(r, readable) {
   r.reader = readable.getReader();
-  (async () => {
+  r.readerDone = (async () => {
     try {
       for (;;) {
         const { value: ad, done } = await r.reader.read();
@@ -295,8 +340,29 @@ function startReader(r, readable) {
 async function onAudioData(r, ad) {
   const wall = Date.now(), mono = performance.now();
   try {
+    // After STOP was requested for the session, every role ignores further frames from the
+    // same instant — otherwise roles finalised later keep recording while the earlier ones
+    // are flushed (measured 2026-09-08, smoke-wc-none: the mix ended 260 ms after the mic).
+    if (r.stopRequested) return;
+    // Test hook: a frozen input delivers nothing — not even a timestamp. Drop the frame here,
+    // before any counter sees it, so the detector below is exercised the way a real stall is.
+    if (r.freezeUntil !== null) {
+      if (mono < r.freezeUntil) return;
+      r.freezeUntil = null;
+    }
     if (r.encoder === null) await configureEncoder(r, ad);
     if (r.encoder === null) return; // unsupported — reported, frames dropped
+
+    // Frames are back after a detected freeze: the gap is filled below even when it is
+    // longer than the 5 s limit of an ordinary timestamp jump (the other roles kept going).
+    let resumedAfterFreeze = false;
+    if (r.frozen) {
+      r.frozen = false; resumedAfterFreeze = true;
+      const frozenMs = Math.round(mono - r.frozenSinceMono);
+      r.frozenTotalMs += frozenMs;
+      journal({ t: 'input_resumed', role: r.role, frozenMs, atFrame: r.framesTotal, timestamp: ad.timestamp });
+      self.postMessage({ type: 'INPUT_RESUMED', role: r.role, frozenMs });
+    }
 
     // Per-frame jitter (informational) and cumulative discontinuity (the real signal).
     if (r.prevTs !== null) {
@@ -317,12 +383,15 @@ async function onAudioData(r, ad) {
       // length so this asset stays aligned with the others. Measured 2026-09-07
       // (accept-4h): 11 × 23 ms drops on the tab track = 268 ms between assets in 4 h.
       // Jumps > 5 s are not filled here — that is a device loss / sleep, handled by
-      // the track policies and journaled.
-      if (session?.opts.fillInputDrops && r.encoder && !r.paused && dev > 0 && dev <= 5_000_000) {
+      // the track policies and journaled — unless the freeze detector had already
+      // flagged this role, in which case the whole gap (≤ FROZEN_FILL_MAX_MS) is filled.
+      const limitUs = resumedAfterFreeze ? FROZEN_FILL_MAX_MS * 1000 : 5_000_000;
+      if (session?.opts.fillInputDrops && r.encoder && !r.paused && dev > 0 && dev <= limitUs) {
         const n = Math.round(dev / 1e6 * r.sampleRate);
         const before48k = r.dropFillSamples48k;
         feedDropSilence(r, n, ad.timestamp);
-        journal({ t: 'drop_filled', role: r.role, deltaUs: dev, frames: n, samples48k: r.dropFillSamples48k - before48k });
+        if (resumedAfterFreeze) r.frozenFillSamples48k += r.dropFillSamples48k - before48k;
+        journal({ t: 'drop_filled', role: r.role, deltaUs: dev, frames: n, samples48k: r.dropFillSamples48k - before48k, afterFreeze: resumedAfterFreeze });
       }
     }
     r.prevTs = ad.timestamp; r.prevFrames = ad.numberOfFrames;
@@ -460,6 +529,11 @@ function fillTimelineGap(r, tocSource, atEnd) {
   let expected48k;
   if (atEnd) expected48k = Math.round(r.frames * 48000 / r.sampleRate);
   else {
+    // Frames still queued in the encoder are pending, not swallowed — never fill over them.
+    // The settle-time rule alone misfired 2026-09-08 (smoke-wc-none): during STOP the worker
+    // was busy finalising other roles, the mix encoder emitted late, and 198 ms of fillers
+    // doubled a 188 ms drop-fill that was merely waiting in the queue.
+    if (r.encoder && r.encoder.encodeQueueSize > 0) return 0;
     const cutoff = performance.now() - FED_SETTLE_MS;
     let settled = null;
     for (let i = r.fedLog.length - 1; i >= 0; i--) if (r.fedLog[i].mono <= cutoff) { settled = r.fedLog[i].cum48k; break; }
@@ -480,13 +554,22 @@ function fillTimelineGap(r, tocSource, atEnd) {
 }
 
 function writeBytes(r, bytes) {
-  r.handle.write(bytes, { at: r.fileBytes });
+  // write() then flush(): the byte count advances only after BOTH succeeded. A page that
+  // failed to reach the disk is not counted, not journaled, and makes the session fatal.
+  try {
+    const n = r.handle.write(bytes, { at: r.fileBytes });
+    if (n !== bytes.length) throw Object.assign(new Error(`short write: ${n} of ${bytes.length} bytes`), { name: 'ShortWriteError' });
+    r.handle.flush();
+  } catch (e) {
+    r.writeFailed = true;
+    fatal(r, e, 'write_page');
+    throw e;
+  }
   r.fileBytes += bytes.length;
-  r.handle.flush();
 }
 
 async function flushRole(r, { eos = false } = {}) {
-  if (!r.muxer || r.closed) return;
+  if (!r.muxer || r.closed || r.writeFailed) return;
   const page = r.muxer.flushPage({ eos });
   if (!page) return;
   writeBytes(r, page);
@@ -520,15 +603,38 @@ async function closeRole(role, reason) {
 async function finalizeRole(r, reason) {
   if (r.closed) return;
   r.closed = true;
+  r.stopRequested = true;
   try { await r.reader?.cancel(); } catch {}
+  // Let an in-flight onAudioData finish before flushing: a frame encoded after flush()
+  // would land after the tail fillers and double-count the timeline.
+  if (r.readerDone) await Promise.race([r.readerDone, new Promise((res) => setTimeout(res, 500))]);
   if (r.encoder) {
     try { await r.encoder.flush(); } catch (e) { journal({ t: 'encoder_flush_error', role: r.role, error: String(e?.message ?? e) }); }
     try { r.encoder.close(); } catch {}
   }
-  if (r.muxer) fillTimelineGap(r, null, true); // tail silence the encoder never emitted (DTX)
-  r.closed = false; await flushRole(r, { eos: true }); r.closed = true;
-  try { r.handle.flush(); r.handle.close(); } catch (e) { journal({ t: 'handle_close_error', role: r.role, error: String(e?.message ?? e) }); }
+  if (r.muxer && !r.writeFailed) fillTimelineGap(r, null, true); // tail silence the encoder never emitted (DTX)
+  r.closed = false;
+  try { await flushRole(r, { eos: true }); } catch (e) { journal({ t: 'eos_write_error', role: r.role, error: String(e?.message ?? e) }); }
+  r.closed = true;
+  try { r.handle.flush(); } catch {}
+  try { r.handle.close(); } catch (e) { journal({ t: 'handle_close_error', role: r.role, error: String(e?.message ?? e) }); }
   journal({ t: 'role_close', role: r.role, reason, ...roleStats(r) });
+}
+
+/** Once a second: a role whose reader is alive but has delivered nothing for longer than the timeout is frozen. */
+function frozenCheck() {
+  if (!session) return;
+  const timeout = session.opts.frozenInputTimeoutMs;
+  if (!(timeout > 0)) return;
+  const now = performance.now();
+  for (const r of roles.values()) {
+    if (r.frozen || r.paused || r.ended || r.closed || r.encoder === null || r.lastMono === null) continue;
+    const silentMs = now - r.lastMono;
+    if (silentMs < timeout) continue;
+    r.frozen = true; r.frozenSinceMono = r.lastMono; r.frozenEvents++;
+    journal({ t: 'input_frozen', role: r.role, silentMs: Math.round(silentMs), lastWall: r.lastWall, lastTs: r.lastTs, frames: r.frames, timeoutMs: timeout });
+    self.postMessage({ type: 'INPUT_FROZEN', role: r.role, silentMs: Math.round(silentMs), timeoutMs: timeout });
+  }
 }
 
 // ──────────────────────────────────────────────── checkpoints & stats ──
@@ -570,6 +676,8 @@ function roleStats(r) {
     fillerPackets: r.fillerPackets, fillerSamples48k: r.fillerSamples48k, fillerEvents: r.fillerEvents,
     fillerSec: round(r.fillerSamples48k / 48000, 3),
     dropFillSamples48k: r.dropFillSamples48k, dropFillEvents: r.dropFillEvents, dropFillSec: round(r.dropFillSamples48k / 48000, 3),
+    frozen: r.frozen, frozenEvents: r.frozenEvents, frozenTotalMs: r.frozenTotalMs + (r.frozen ? Math.round(performance.now() - r.frozenSinceMono) : 0),
+    frozenFillSec: round(r.frozenFillSamples48k / 48000, 3), writeFailed: r.writeFailed,
     encoderRequested: r.encoderRequest, encoderApplied: r.encoderApplied, encoderSupported: r.encoderSupported,
     opusHead: r.opusHead, opusHeadSource: r.opusHeadSource,
     pageIntervalMs: summarize(r.pageIntervalsMs),
@@ -595,7 +703,7 @@ function checkpoint() {
     snap[r.role] = { frames: r.frames, pausedFrames: r.pausedFrames, sampleRate: r.sampleRate, granule48k: r.muxer?.granule ?? 0,
                      silenceFrames: r.sampleRate ? Math.round(r.silenceFilled48k * r.sampleRate / 48000) : 0,
                      lastTs: r.lastTs, lastWall: r.lastWall, fileBytes: r.fileBytes, packets: r.packets,
-                     discontinuities: r.discontinuities, ended: r.ended, paused: r.paused,
+                     discontinuities: r.discontinuities, ended: r.ended, paused: r.paused, frozen: r.frozen,
                      mediaSec: r.sampleRate ? round(r.frames / r.sampleRate, 4) : null };
   }
   const cp = { t: 'checkpoint', n: ++session.checkpoints, wall, mono: round(mono, 1), roles: snap };
@@ -618,25 +726,34 @@ function checkpoint() {
 
 async function writeReport(report, final = false) {
   if (!session) throw new Error('no session');
-  const fh = await session.dir.getFileHandle('capture-report.json', { create: true });
-  const h = await fh.createSyncAccessHandle();
+  // Always answer REPORT_WRITTEN — a full disk must not turn into a 10 s timeout on STOP.
   try {
-    const bytes = new TextEncoder().encode(JSON.stringify(report, null, 2));
-    h.truncate(0); h.write(bytes, { at: 0 }); h.flush();
-  } finally { h.close(); }
-  journal({ t: final ? 'report_final' : 'report_initial', bytes: JSON.stringify(report).length });
-  self.postMessage({ type: 'REPORT_WRITTEN', final });
+    const fh = await session.dir.getFileHandle('capture-report.json', { create: true });
+    const h = await fh.createSyncAccessHandle();
+    try {
+      const bytes = new TextEncoder().encode(JSON.stringify(report, null, 2));
+      h.truncate(0); h.write(bytes, { at: 0 }); h.flush();
+    } finally { h.close(); }
+    journal({ t: final ? 'report_final' : 'report_initial', bytes: JSON.stringify(report).length });
+    self.postMessage({ type: 'REPORT_WRITTEN', final, ok: true });
+  } catch (e) {
+    journal({ t: 'report_write_error', final, error: String(e?.message ?? e) });
+    self.postMessage({ type: 'REPORT_WRITTEN', final, ok: false, error: String(e?.message ?? e) });
+  }
 }
 
 async function stopAll() {
   if (!session) { self.postMessage({ type: 'STOPPED', result: null }); return; }
-  clearInterval(session.flushTimer); clearInterval(session.checkpointTimer);
+  clearInterval(session.flushTimer); clearInterval(session.checkpointTimer); clearInterval(session.frozenTimer);
+  // One stop instant for every role: frames arriving after this line are ignored by all of them.
+  const stopWall = Date.now();
+  for (const r of roles.values()) r.stopRequested = true;
   checkpoint();
   const stats = {};
-  for (const r of roles.values()) { await finalizeRole(r, 'stop'); stats[r.role] = roleStats(r); }
+  for (const r of roles.values()) { await finalizeRole(r, session.fatal ? 'stop_after_fatal' : 'stop'); stats[r.role] = roleStats(r); }
   const result = {
     sessionId: session.id, roles: stats, checkpoints: session.checkpoints, clockJumps: session.clockJumps,
-    journalBytes: session.journalSize, openedWall: session.openedWall, closedWall: Date.now(),
+    journalBytes: session.journalSize, openedWall: session.openedWall, stopWall, closedWall: Date.now(), fatal: session.fatal,
   };
   journal({ t: 'session_stopped', ...result });
   // The session (journal + directory) stays open: the offscreen document writes

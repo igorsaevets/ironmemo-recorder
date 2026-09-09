@@ -96,12 +96,17 @@ async function refresh() {
 
   if (s.orphaned) {
     $('orphan').hidden = false;
-    $('orphan').textContent =
-      `Найдена незавершённая запись от ${new Date(s.orphaned.startedAt).toLocaleString('ru-RU')}. `
-      + 'Сегменты лежат в OPFS. Автоматическое восстановление пока не реализовано — '
-      + 'обещать его до проверки декодированием было бы нечестно.';
+    $('orphan').textContent = orphanText(s.orphaned);
   } else {
     $('orphan').hidden = true;
+  }
+
+  // Recording status without data: the offscreen document reports progress every 1–5 s;
+  // if nothing arrived for 20 s the status is stale (offscreen gone, browser stalled).
+  const stale = rec && s.progressAt && Date.now() - s.progressAt > 20_000;
+  if (stale && !warn) {
+    $('warn').hidden = false;
+    $('warn').textContent = `Нет данных от записи ${Math.round((Date.now() - s.progressAt) / 1000)} с. Если это продолжается — остановите и запустите запись заново.`;
   }
 
   clearInterval(timerHandle);
@@ -116,6 +121,26 @@ async function refresh() {
   } else if (!paused) {
     $('timer').textContent = '00:00:00';
   }
+}
+
+/**
+ * What to say about a recording that ended without STOP. Only what recovery.json measured:
+ * seconds on disk per role and whether the file decodes end to end. No promise beyond that.
+ */
+function orphanText(o) {
+  const when = o.startedAt ? new Date(o.startedAt).toLocaleString('ru-RU') : '—';
+  const r = o.recovery;
+  if (!r) return `Запись от ${when} была прервана без остановки. Файлы лежат в хранилище браузера; проверка ещё не выполнялась.`;
+  if (!r.ok && r.error) return `Запись от ${when} была прервана. Проверка файлов не удалась: ${r.error}`;
+  if (r.skipped) return `Запись от ${when}: ${r.skipped}.`;
+  const fmt = (sec) => { const s = Math.round(sec); return `${Math.floor(s / 60)} мин ${String(s % 60).padStart(2, '0')} с`; };
+  const parts = Object.entries(r.roles ?? {}).map(([role, x]) => {
+    const name = { local_mic: 'микрофон', remote_tab: 'вкладка', compatibility_mix: 'микс' }[role] ?? role;
+    const sec = x.secondsDecoded ?? x.secondsOnDisk;
+    return `${name} — ${fmt(sec)}${x.decodesFully === true ? ', декодируется целиком' : x.decodesFully === false ? ', ДЕКОДИРУЕТСЯ НЕ ЦЕЛИКОМ' : ''}`;
+  });
+  return `Запись от ${when} была прервана без остановки. На диске: ${parts.join('; ')}. `
+       + `Проверка заняла ${(r.ms / 1000).toFixed(1)} с. Файлы — в «Проба возможностей → Сессии».`;
 }
 
 function showError(msg) {

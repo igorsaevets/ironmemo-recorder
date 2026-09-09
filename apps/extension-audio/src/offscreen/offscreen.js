@@ -9,8 +9,16 @@
  *   — реакция на потерю/возврат устройства, отзыв разрешения, закрытие вкладки;
  *   — capture-report.json: requested против applied по КАЖДОМУ ключу схемы.
  *
- * ЧЕГО ЗДЕСЬ ЕЩЁ НЕТ (намеренно, каждое — отдельная итерация):
- *   — ремукс и восстановление после сбоя (И-2);
+ * ДОБАВЛЕНО В И-2 (08.09.2026, ADR-004):
+ *   — стратегия rolling_finalized для MediaRecorder (сегменты по N с, стык
+ *     «stop→start» или «start→stop», журнал segment_start/segment_stop/segment_handover);
+ *   — части MediaRecorder именуются <role>.<segment>.<seq>.part;
+ *   — отказ записи (квота/диск) — FATAL из worker'а или из writeChunk → запись
+ *     останавливается с явной ошибкой, а не «продолжается» без байтов;
+ *   — замёрзший вход (INPUT_FROZEN/INPUT_RESUMED от worker'а) — предупреждение;
+ *   — обработка оборванных записей (RECOVER → recovery-worker.js, см. shared/recovery.js).
+ *
+ * ЧЕГО ЗДЕСЬ ЕЩЁ НЕТ (намеренно):
  *   — инкрементальный SHA-256 и экспорт библиотеки (И-3).
  *
  * Пути movement WebCodecs: этот документ только открывает потоки и отдаёт
@@ -53,6 +61,11 @@ const state = {
   micConstraints: null,
   micStored: null,
   deviceWatchInstalled: false,
+  frozen: {},              // role -> { since, silentMs } while the worker reports no input
+  fatal: null,             // { name, error, during, role } — a media write failed; session is being stopped
+  stopping: false,
+  lastQuotaWarnAt: 0,
+  storageEstimate: null,
 };
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -66,6 +79,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case 'RESUME': return sendResponse(await resume());
         case 'STATUS': return sendResponse(status());
         case 'PROBE_WEBCODECS': return sendResponse(await probeWebCodecs(msg));
+        case 'RECOVER': return sendResponse(await recoverSessions(msg));
         case 'DEBUG':  return sendResponse(await debugCommand(msg));
         case 'DEBUG_GUM': return sendResponse(await debugGum(msg));
         default:       return sendResponse({ ok: false, error: `Неизвестно: ${msg.type}` });
@@ -146,6 +160,7 @@ async function start({ sessionId, streamId, settings, startTimings = null }) {
   state.journal = []; state.recorders = []; state.streams = []; state.targets = new Map();
   state.events = []; state.checkpoints = []; state.memSamples = []; state.roleApplied = {}; state.roleStats = {};
   state.lost = {}; state.paused = false; state.mixSources = new Map();
+  state.frozen = {}; state.fatal = null; state.stopping = false; state.lastQuotaWarnAt = 0; state.storageEstimate = null;
 
   const mode = g('source.mode', 'mic');
   const impl = g('audioEnc.impl', 'mediarecorder');
@@ -349,37 +364,137 @@ async function startMediaRecorder(applied, bitrate) {
   applied.tracks = state.recorders.map((r) => ({
     role: r.role, requestedMime: mime, actualMime: r.actualMime,
     requestedBitrate: bitrate, actualBitrate: r.actualBitrate, mimeHonoured: r.actualMime === mime,
+    firstSegmentStartWall: r.startWall,
   }));
+  applied.segmentStrategy = g('storage.segmentStrategy', 'continuous');
+  // rolling_finalized (I2): every `segmentSeconds` each role's recorder is replaced by a fresh one, so
+  // every segment on disk is a complete MediaRecorder output (own EBML header, closed by stop()).
+  // Which is NOT the same as "has a duration": Chrome's WebM muxer writes live-mode headers and
+  // never seeks back — that is measured in I2, not assumed here.
+  if (applied.segmentStrategy === 'rolling_finalized') {
+    const every = Math.max(1, g('storage.segmentSeconds', 30)) * 1000;
+    applied.rollingHandover = g('storage.rollingHandover', 'start_then_stop');
+    state.timers.push(setInterval(() => { rollSegments().catch((e) => report('error', { error: `Смена сегмента: ${e?.message ?? e}` })); }, every));
+  }
 }
 
 function startRecorderFor(role, stream, mime, bitrate) {
   if (!MediaRecorder.isTypeSupported(mime)) {
     throw new Error(`Контейнер ${mime} не поддерживается этим Chrome. Смените его в настройках.`);
   }
+  if (!stream.active) throw new Error(`Поток роли ${role} уже неактивен — новый сегмент не запущен.`);
   const rec = new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: bitrate });
   const prev = state.recorders.filter((r) => r.role === role).at(-1);
   const entry = { role, recorder: rec, chunks: [], mime, bytes: prev?.bytes ?? 0, seq: prev?.seq ?? 0,
-                  segment: (prev?.segment ?? -1) + 1, lastChunkMono: null, chunkIntervalsMs: [] };
+                  segment: (prev?.segment ?? -1) + 1, lastChunkMono: null, chunkIntervalsMs: [],
+                  segmentBytes: 0, segmentParts: 0, stopRequested: false, stoppedWall: null,
+                  startWall: null, startMono: null, firstChunkWall: null };
   rec.ondataavailable = async (e) => {
     if (!e.data.size) return;
     const mono = performance.now();
+    if (entry.firstChunkWall === null) entry.firstChunkWall = Date.now();
     if (entry.lastChunkMono !== null && entry.chunkIntervalsMs.length < 100000) entry.chunkIntervalsMs.push(Math.round(mono - entry.lastChunkMono));
     entry.lastChunkMono = mono;
-    entry.bytes += e.data.size;
-    entry.seq++;
+    entry.bytes += e.data.size; entry.segmentBytes += e.data.size;
+    entry.seq++; entry.segmentParts++;
     if (state.opfsDir) {
-      await writeChunk(entry, e.data).catch((err) => report('error', { error: `Запись на диск: ${err.message}` }));
+      await writeChunk(entry, e.data).catch((err) => onMediaWriteFailed(role, err, 'write_part'));
     } else {
       entry.chunks.push(e.data);
     }
-    throttledProgress({ role, seq: entry.seq, bytes: entry.bytes });
+    throttledProgress(mrProgressSummary());
   };
-  rec.onerror = (e) => report('error', { error: `MediaRecorder ${role}: ${e.error?.message}` });
+  rec.onerror = (e) => {
+    logEvent({ t: 'recorder_error', role, segment: entry.segment, error: String(e.error?.message ?? e.error ?? e) });
+    report('error', { error: `MediaRecorder ${role}: ${e.error?.message}` });
+  };
+  // A recorder that stops without being asked (all tracks ended, or Chrome gave up) is a
+  // journaled fact, not a silent one: the track policies (onTrackEnded) decide what happens next.
+  rec.onstop = () => {
+    entry.stoppedWall = Date.now();
+    if (!entry.stopRequested) {
+      logEvent({ t: 'recorder_stopped_unexpectedly', role, segment: entry.segment, parts: entry.segmentParts, bytes: entry.segmentBytes });
+    }
+    state.journal.push({ event: 'segment_stop', role, segment: entry.segment, parts: entry.segmentParts, bytes: entry.segmentBytes,
+                         requested: entry.stopRequested, stopWall: entry.stoppedWall, startWall: entry.startWall,
+                         tMs: Math.round(performance.now() - state.startedAt) });
+    if (state.opfsDir) flushJournal().catch(() => {});
+  };
+  entry.startWall = Date.now(); entry.startMono = performance.now();
   rec.start(g('storage.timesliceMs', 5000));
   entry.actualMime = rec.mimeType;
   entry.actualBitrate = rec.audioBitsPerSecond;
   state.recorders.push(entry);
+  state.journal.push({ event: 'segment_start', role, segment: entry.segment, startWall: entry.startWall, startMono: entry.startMono,
+                       mime: entry.actualMime, bitrate: entry.actualBitrate, tMs: Math.round(performance.now() - state.startedAt) });
   return entry;
+}
+
+/** Stop one recorder and resolve after its final dataavailable + stop have fired. */
+function stopRecorder(entry) {
+  return new Promise((resolve) => {
+    entry.stopRequested = true;
+    if (entry.recorder.state === 'inactive') return resolve();
+    const prevOnStop = entry.recorder.onstop;
+    entry.recorder.onstop = (ev) => { try { prevOnStop?.(ev); } finally { resolve(); } };
+    entry.recorder.stop();
+  });
+}
+
+/**
+ * rolling_finalized: replace the live recorder of every role. The handover mode decides
+ * whether there is a hole (stop → start) or an overlap (start → stop) at the junction;
+ * both are journaled with wall times so recovery.js can fill or trim, and so the I2 matrix
+ * can put a number on it.
+ */
+async function rollSegments() {
+  if (!state.sessionId || state.stopping || state.paused) return;
+  const mode = g('storage.rollingHandover', 'start_then_stop');
+  const mime = resolveMime();
+  const bitrate = g('audioEnc.bitrateKbps', 48) * 1000;
+  const live = new Map();
+  for (const e of state.recorders) if (e.recorder.state === 'recording') live.set(e.role, e);
+  for (const [role, old] of live) {
+    const t = state.targets.get(role);
+    if (!t?.stream?.active) continue;
+    const h = { role, mode, oldSegment: old.segment, stopRequestedWall: null, stoppedWall: null, newStartWall: null };
+    if (mode === 'stop_then_start') {
+      h.stopRequestedWall = Date.now();
+      await stopRecorder(old);
+      h.stoppedWall = old.stoppedWall;
+      const fresh = startRecorderFor(role, t.stream, mime, bitrate);
+      h.newStartWall = fresh.startWall; h.newSegment = fresh.segment;
+      h.gapMs = h.newStartWall - h.stopRequestedWall;
+    } else {
+      const fresh = startRecorderFor(role, t.stream, mime, bitrate);
+      h.newStartWall = fresh.startWall; h.newSegment = fresh.segment;
+      h.stopRequestedWall = Date.now();
+      await stopRecorder(old);
+      h.stoppedWall = old.stoppedWall;
+      h.overlapMs = h.stoppedWall - h.newStartWall;
+    }
+    state.journal.push({ event: 'segment_handover', ...h, tMs: Math.round(performance.now() - state.startedAt) });
+    logEvent({ t: 'segment_handover', ...h });
+  }
+  if (state.opfsDir) await flushJournal().catch(() => {});
+}
+
+function mrProgressSummary() {
+  const roles = {};
+  for (const e of state.recorders) {
+    const r = roles[e.role] ?? (roles[e.role] = { bytes: 0, parts: 0, segments: 0, live: false });
+    r.bytes = e.bytes; r.parts = e.seq; r.segments = e.segment + 1;
+    if (e.recorder.state === 'recording') r.live = true;
+  }
+  return { engine: 'mediarecorder', roles, bytes: Math.max(0, ...Object.values(roles).map((r) => r.bytes)),
+           seq: Math.max(0, ...Object.values(roles).map((r) => r.parts)), journalEntries: state.journal.length,
+           storage: state.storageEstimate };
+}
+
+/** A MediaRecorder-path write failed (quota, disk). Same rule as the worker: stop with a clear error. */
+function onMediaWriteFailed(role, err, during) {
+  logEvent({ t: 'write_failed', role, name: err?.name ?? 'Error', error: String(err?.message ?? err), during });
+  fatalStop({ role, name: err?.name ?? 'Error', error: String(err?.message ?? err), during });
 }
 
 function resolveMime() {
@@ -397,24 +512,35 @@ function resolveMime() {
  * то, что действительно легло, иначе оно восстановит несуществующие байты.
  */
 async function writeChunk(entry, blob) {
-  const name = `${entry.role}.${String(entry.seq).padStart(6, '0')}.part`;
+  // <role>.<segment>.<seq>.part — sorts into playback order; the segment number tells the
+  // recovery which parts share one EBML header (rolling_finalized writes one per segment).
+  const name = `${entry.role}.${String(entry.segment).padStart(3, '0')}.${String(entry.seq).padStart(6, '0')}.part`;
   const fh = await state.opfsDir.getFileHandle(name, { create: true });
   const w = await fh.createWritable();
   await w.write(blob);
   await w.close();
   state.journal.push({
-    role: entry.role, seq: entry.seq, segment: entry.segment, file: name, bytes: blob.size,
+    event: 'part', role: entry.role, seq: entry.seq, segment: entry.segment, file: name, bytes: blob.size,
     tMs: Math.round(performance.now() - state.startedAt), at: Date.now(),
   });
   if (g('storage.journalEnabled', true)) await flushJournal();
 }
 
-async function flushJournal() {
-  if (!state.opfsDir) return;
-  const fh = await state.opfsDir.getFileHandle('journal.jsonl', { create: true });
-  const w = await fh.createWritable();
-  await w.write(state.journal.map((e) => JSON.stringify(e)).join('\n') + '\n');
-  await w.close();
+// The MR journal is rewritten whole on every flush (createWritable swaps the file in on
+// close). Flushes are serialised: two concurrent writers would race on which close() lands
+// last, and the loser's lines (e.g. session_stopped) would vanish from disk.
+let journalChain = Promise.resolve();
+function flushJournal() {
+  const dir = state.opfsDir;
+  if (!dir) return Promise.resolve();
+  const lines = state.journal.map((e) => JSON.stringify(e)).join('\n') + '\n';
+  journalChain = journalChain.catch(() => {}).then(async () => {
+    const fh = await dir.getFileHandle('journal.jsonl', { create: true });
+    const w = await fh.createWritable();
+    await w.write(lines);
+    await w.close();
+  });
+  return journalChain;
 }
 
 // ───────────────────────────────────────────── движок: WebCodecs ──
@@ -447,11 +573,45 @@ function onWorkerMessage(e) {
       logEvent({ t: 'worker_error', role: m.role ?? null, error: m.error, during: m.during ?? null });
       report('error', { error: `Worker${m.role ? ' (' + m.role + ')' : ''}: ${m.error}` });
       break;
+    case 'FATAL':
+      // A page did not reach the disk (quota / disk full). Stop now, keep what is written.
+      logEvent({ t: 'worker_fatal', role: m.role ?? null, name: m.name, error: m.error, during: m.during ?? null, fileBytes: m.fileBytes ?? null });
+      fatalStop({ role: m.role ?? null, name: m.name, error: m.error, during: m.during ?? null });
+      break;
+    case 'INPUT_FROZEN':
+      state.frozen[m.role] = { since: Date.now() - m.silentMs, silentMs: m.silentMs };
+      logEvent({ t: 'input_frozen', role: m.role, silentMs: m.silentMs, timeoutMs: m.timeoutMs,
+                 trackReadyState: state.targets.get(m.role)?.track?.readyState ?? null });
+      report('warning', { error: `Нет звука от «${roleLabel(m.role)}» уже ${Math.round(m.silentMs / 1000)} с, хотя дорожка не завершилась. `
+                               + 'Запись продолжается; если звук вернётся, пропуск будет заполнен тишиной.' });
+      break;
+    case 'INPUT_RESUMED':
+      delete state.frozen[m.role];
+      logEvent({ t: 'input_resumed', role: m.role, frozenMs: m.frozenMs });
+      report('info', { error: null, info: `Звук от «${roleLabel(m.role)}» снова идёт (пауза ${Math.round(m.frozenMs / 100) / 10} с заполнена тишиной).` });
+      break;
     case 'ROLE_CLOSED':
       state.roleStats[m.role] = m.stats;
       break;
     default: break;
   }
+}
+
+const roleLabel = (role) => ({ local_mic: 'микрофон', remote_tab: 'вкладка', compatibility_mix: 'микс' }[role] ?? role);
+
+/**
+ * Stop because continuing would lose data silently. The status becomes `error`, the
+ * files stay on disk, and the STOP result (what was written) travels with the event.
+ */
+async function fatalStop(info) {
+  if (state.fatal || !state.sessionId) return;
+  state.fatal = { ...info, at: Date.now() };
+  const human = /Quota/i.test(info.name ?? '') || /quota|space/i.test(info.error ?? '')
+    ? 'Место для записи закончилось (квота хранилища браузера или диск). Запись остановлена; всё, что успело записаться, сохранено.'
+    : `Запись на диск не удалась (${info.name}: ${info.error}). Запись остановлена; записанное сохранено.`;
+  let result = null;
+  try { result = (await stop({ reason: 'fatal' }))?.result ?? null; } catch (e) { logEvent({ t: 'fatal_stop_error', error: String(e?.message ?? e) }); }
+  report('fatal', { error: human, fatal: state.fatal, result });
 }
 
 function encoderRequestFromSettings() {
@@ -494,6 +654,7 @@ async function startWebCodecs(applied) {
       fillGapsWithSilence: g('source.onDeviceReturn', 'resume_fill_silence') === 'resume_fill_silence',
       muxerGapFillMs: g('storage.muxerGapFillMs', 40),
       fillInputDrops: g('source.fillInputDropsWithSilence', true),
+      frozenInputTimeoutMs: g('source.frozenInputTimeoutMs', 3000),
     },
     settingsSnapshot: g('experiment.forceProfileEveryRecording', true) ? state.settings : null,
   }, 'SESSION_OPENED');
@@ -637,8 +798,11 @@ async function reacquireMic(role, device, lost, { forceDefault = false } = {}) {
     logEvent({ t: 'device_returned', role, label: track.label, gapMs, silenceFrames: r.silenceFrames ?? 0, match: forceDefault ? 'default' : 'same_device' });
   } else {
     const mime = resolveMime();
-    startRecorderFor(role, stream, mime, g('audioEnc.bitrateKbps', 48) * 1000);
-    logEvent({ t: 'device_returned', role, label: track.label, gapMs, match: forceDefault ? 'default' : 'same_device', note: 'MediaRecorder: new segment, gap NOT filled' });
+    const fresh = startRecorderFor(role, stream, mime, g('audioEnc.bitrateKbps', 48) * 1000);
+    // The gap is not in the file; recovery.js reads segment_start.startWall and fills it when
+    // the parts are remuxed (that is what makes the remux worth doing for MediaRecorder).
+    state.journal.push({ event: 'device_gap', role, gapMs, lostWall: lost.wall, resumedWall: Date.now(), segment: fresh.segment });
+    logEvent({ t: 'device_returned', role, label: track.label, gapMs, match: forceDefault ? 'default' : 'same_device', note: 'MediaRecorder: new segment, gap filled only on remux' });
   }
   delete state.lost[role];
   report('info', { error: null, info: `Устройство «${track.label}» снова записывается (пауза ${Math.round(gapMs / 100) / 10} с).` });
@@ -653,6 +817,26 @@ function sampleMemory() {
               events: state.events.length, checkpointsKept: state.checkpoints.length };
   if (state.memSamples.length < 2000) state.memSamples.push(s);
   logEvent({ t: 'memory', ...s });
+  checkStorageQuota().catch(() => {});
+}
+
+/**
+ * storage.quotaWarnPercent: warn before the disk says no. navigator.storage.estimate() is the
+ * only readback the browser offers; with `unlimitedStorage` the quota is the free disk space
+ * (measured in I2 — see 03-research/I2-crash-recovery/quota/). Warn at most every 5 minutes.
+ */
+async function checkStorageQuota() {
+  if (!navigator.storage?.estimate) return;
+  const est = await navigator.storage.estimate();
+  const pct = est.quota ? Math.round(est.usage / est.quota * 1000) / 10 : null;
+  state.storageEstimate = { usageMB: Math.round(est.usage / 1048576 * 10) / 10, quotaMB: Math.round(est.quota / 1048576), percent: pct, at: Date.now() };
+  const warnAt = g('storage.quotaWarnPercent', 80);
+  if (pct !== null && pct >= warnAt && Date.now() - state.lastQuotaWarnAt > 300_000) {
+    state.lastQuotaWarnAt = Date.now();
+    logEvent({ t: 'quota_warning', ...state.storageEstimate, warnAt });
+    report('warning', { error: `Хранилище браузера заполнено на ${pct} % (${state.storageEstimate.usageMB} из ${state.storageEstimate.quotaMB} МБ). `
+                             + 'Когда место закончится, запись остановится с сохранением записанного.' });
+  }
 }
 
 let lastClock = null;
@@ -890,18 +1074,23 @@ async function resume() {
 
 function status() {
   return { ok: true, sessionId: state.sessionId, engine: state.engine, paused: state.paused,
-           progress: state.worker ? progressSummary() : null, events: state.events.slice(-20), lost: state.lost };
+           progress: state.worker ? progressSummary() : (state.recorders.length ? mrProgressSummary() : null),
+           events: state.events.slice(-20), lost: state.lost, frozen: state.frozen, fatal: state.fatal,
+           storage: state.storageEstimate };
 }
 
-async function stop() {
+async function stop({ reason = 'user' } = {}) {
   if (!state.sessionId) return { ok: false, error: 'Запись не идёт.' };
+  if (state.stopping) return { ok: false, error: 'Остановка уже идёт.' };
+  state.stopping = true;
+  const stopRequestedWall = Date.now();
   const results = [];
   let workerResult = null;
   for (const t of state.timers) clearInterval(t);
   state.timers = [];
   navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange);
   state.deviceWatchInstalled = false;
-  logEvent({ t: 'stop_requested' });
+  logEvent({ t: 'stop_requested', reason });
 
   if (state.worker) {
     const r = await workerRequest({ type: 'STOP' }, 'STOPPED', { timeoutMs: 30000 });
@@ -912,19 +1101,18 @@ async function stop() {
                      storedIn: 'opfs', stats: s });
     }
   } else {
-    await Promise.all(state.recorders.map((entry) => new Promise((resolve) => {
-      if (entry.recorder.state === 'inactive') return resolve();
-      entry.recorder.onstop = resolve;
-      entry.recorder.stop();
-    })));
+    await Promise.all(state.recorders.map((entry) => stopRecorder(entry)));
     const byRole = new Map();
     for (const entry of state.recorders) {
       const prev = byRole.get(entry.role);
       byRole.set(entry.role, { role: entry.role, mime: entry.actualMime, bytes: entry.bytes, segments: entry.seq,
                                storedIn: state.opfsDir ? 'opfs' : 'memory', recorderSegments: (prev?.recorderSegments ?? 0) + 1,
-                               chunkIntervalMs: meanInterval(entry.chunkIntervalsMs) });
+                               chunkIntervalMs: meanInterval(entry.chunkIntervalsMs), firstSegmentStartWall: prev?.firstSegmentStartWall ?? entry.startWall,
+                               lastSegmentStopWall: entry.stoppedWall });
     }
     results.push(...byRole.values());
+    state.journal.push({ event: 'session_stopped', reason, at: Date.now(), tMs: Math.round(performance.now() - state.startedAt),
+                         parts: state.journal.filter((j) => j.event === 'part').length });
     if (state.opfsDir) await flushJournal().catch(() => {});
   }
 
@@ -947,14 +1135,43 @@ async function stop() {
     drift, timeline: state.timeline, events: state.events.length, clockJumps: workerResult?.clockJumps ?? [],
     checkpoints: workerResult?.checkpoints ?? state.checkpoints.length,
     memory: { samples: state.memSamples.length, first: state.memSamples[0] ?? null, last: state.memSamples.at(-1) ?? null },
-    mismatches: finalReport?.mismatches ?? null,
+    mismatches: finalReport?.mismatches ?? null, stopReason: reason, fatal: state.fatal, frozenAtStop: Object.keys(state.frozen),
+    stopRequestedWall, workerStopWall: workerResult?.stopWall ?? null,
   };
 
   Object.assign(state, {
     sessionId: null, recorders: [], streams: [], audioContext: null, passthroughNode: null, mixDest: null,
     opfsDir: null, targets: new Map(), pending: new Map(), lost: {}, paused: false, engine: null,
+    frozen: {}, stopping: false,
   });
   return { ok: true, result };
+}
+
+// ─────────────────────────────────── оборванные записи: проверка и сборка ──
+
+/**
+ * RECOVER {sessionId?, all?, opts}: run shared/recovery.js in a dedicated Worker (sync access
+ * handles + AudioDecoder live there) and return its report. Refused while a recording is
+ * live: the worker would compete with it for the disk, and the orphan check that triggers
+ * this runs at browser start, when nothing records yet.
+ */
+async function recoverSessions({ sessionId = null, all = false, opts = {} }) {
+  if (state.sessionId) return { ok: false, error: 'Идёт запись — обработка оборванных записей отложена.' };
+  // Offscreen documents have no chrome.storage (only chrome.runtime — I6 §1.1.5, measured here
+  // 2026-09-08: "Cannot read properties of undefined (reading 'local')"). The service worker
+  // reads the settings and sends the resolved options in the message.
+  const worker = new Worker(new URL('./recovery-worker.js', import.meta.url), { type: 'module' });
+  try {
+    return await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('recovery-worker не ответил за 10 минут')), 600_000);
+      worker.onmessage = (e) => { clearTimeout(timer); resolve(e.data); };
+      worker.onerror = (e) => { clearTimeout(timer); reject(new Error(`recovery-worker: ${e.message}`)); };
+      worker.postMessage({ type: all ? 'RECOVER_ALL' : 'RECOVER', sessionId,
+                           opts: { remux: true, validate: true, muxerGapFillMs: 40, ...opts } });
+    });
+  } finally {
+    worker.terminate();
+  }
 }
 
 // ───────────────────────────────────────── отладочные команды (тесты) ──
@@ -1009,6 +1226,41 @@ async function debugCommand({ what, role = 'local_mic', sampleRate = 44100 }) {
       if (!state.worker) return { ok: false, error: 'no worker' };
       state.worker.postMessage({ type: 'SYNTH_DROP', role, ms: sampleRate });  // `sampleRate` field carries ms here
       logEvent({ t: 'debug', what, role, ms: sampleRate });
+      return { ok: true };
+    }
+    case 'freeze_input': {
+      // I2: "track live, no frames" for `ms` milliseconds — the audiosrv-hang shape, no device touched.
+      if (!state.worker) return { ok: false, error: 'freeze_input needs the WebCodecs engine' };
+      state.worker.postMessage({ type: 'FREEZE_INPUT', role, ms: sampleRate });  // `sampleRate` field carries ms here
+      logEvent({ t: 'debug', what, role, ms: sampleRate, trackReadyState: t?.track?.readyState ?? null });
+      return { ok: true };
+    }
+    case 'roll_now': {
+      if (state.engine !== 'mediarecorder') return { ok: false, error: 'roll_now needs the MediaRecorder engine' };
+      await rollSegments();
+      return { ok: true, journal: state.journal.slice(-6) };
+    }
+    case 'suspend_context': {
+      // I2: freeze the compatibility_mix input for `ms` on BOTH engines — the AudioContext stops
+      // rendering, its destination track stays `live` and delivers nothing. The closest thing to
+      // the Windows Audio hang that can be produced without touching a device.
+      if (!state.audioContext) return { ok: false, error: 'no AudioContext' };
+      const ms = sampleRate;
+      const ac = state.audioContext;
+      logEvent({ t: 'debug', what, ms, contextState: ac.state });
+      await ac.suspend();
+      setTimeout(() => { ac.resume().then(() => logEvent({ t: 'debug', what: 'context_resumed', contextState: ac.state })).catch(() => {}); }, ms);
+      return { ok: true, state: ac.state };
+    }
+    case 'simulate_quota': {
+      // I2 quota cell: simulate QuotaExceededError without touching the disk. Reaches the SAME
+      // fatalStop() path as onMediaWriteFailed (offscreen:497) and worker FATAL (offscreen:579).
+      // Rationale: CfT 152 CDP `Storage.getUsageAndQuota` returns "Internal error" for
+      // chrome-extension origins (measured 2026-09-08, matrix run continuous--quota fatal), and
+      // reaching a real per-origin quota is impractical for an automated cell (default is ~60% of
+      // free disk without unlimitedStorage — many GB).
+      logEvent({ t: 'write_failed', role: 'session', name: 'QuotaExceededError', error: 'Quota exceeded (simulated)', during: 'debug_simulate_quota' });
+      fatalStop({ role: 'session', name: 'QuotaExceededError', error: 'Quota exceeded (simulated)', during: 'debug_simulate_quota' });
       return { ok: true };
     }
     case 'memory': sampleMemory(); return { ok: true, sample: state.memSamples.at(-1) };

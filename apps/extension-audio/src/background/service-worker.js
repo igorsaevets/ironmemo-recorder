@@ -31,6 +31,8 @@
  * очистки данных сайта.
  */
 
+import { getByPath } from '../shared/settings-schema.js';
+
 // Момент старта ЭТОГО экземпляра service worker'а. performance.now() при
 // получении START = сколько worker уже живёт: малое значение = холодный старт.
 const SW_BOOT = { wall: Date.now(), timeOrigin: performance.timeOrigin };
@@ -39,6 +41,8 @@ const OFFSCREEN_PATH = 'src/offscreen/offscreen.html';
 const PERMISSION_PATH = 'src/permission/permission.html';
 const STATE_KEY = 'ironmemo.captureState.v1';
 const MIC_PERMISSION_KEY = 'ironmemo.micPermissionGranted';
+const RECOVERY_KEY = 'ironmemo.recovery.v1';
+const SETTINGS_KEY = 'ironmemo.settings.v1';
 
 // ─────────────────────────────────────────────────── состояние ──
 
@@ -104,21 +108,24 @@ function requestMicPermissionInteractively() {
 
 // ──────────────────────────────────────── offscreen document ──
 
-async function ensureOffscreen() {
+async function ensureOffscreen({ purpose = 'capture' } = {}) {
   const existing = await chrome.runtime.getContexts({
     contextTypes: ['OFFSCREEN_DOCUMENT'],
     documentUrls: [chrome.runtime.getURL(OFFSCREEN_PATH)],
   });
   if (existing.length) return { existed: true };
 
-  await chrome.offscreen.createDocument({
-    url: OFFSCREEN_PATH,
-    reasons: ['USER_MEDIA', 'AUDIO_PLAYBACK'],
-    justification:
-      'Запись микрофона и звука вкладки, воспроизведение возвращаемого звука вкладки '
-      + 'и потоковая запись сегментов на диск. Service worker для этого не подходит: '
-      + 'он эфемерен и не имеет доступа к MediaStream.',
-  });
+  // Two honest reasons for the same document: capture (streams + playback) and, at browser
+  // start, the check of an interrupted recording — that one only runs a Worker (WORKERS).
+  const spec = purpose === 'recovery'
+    ? { reasons: ['WORKERS'],
+        justification: 'Проверка записи, прерванной сбоем: чтение файлов в OPFS и декодирование в Worker '
+                     + '(createSyncAccessHandle и AudioDecoder недоступны в service worker).' }
+    : { reasons: ['USER_MEDIA', 'AUDIO_PLAYBACK'],
+        justification: 'Запись микрофона и звука вкладки, воспроизведение возвращаемого звука вкладки '
+                     + 'и потоковая запись сегментов на диск. Service worker для этого не подходит: '
+                     + 'он эфемерен и не имеет доступа к MediaStream.' };
+  await chrome.offscreen.createDocument({ url: OFFSCREEN_PATH, ...spec });
   return { existed: false };
 }
 
@@ -289,9 +296,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           }
           if (msg.event === 'warning') await setState({ lastWarning: msg.error, lastWarningAt: Date.now() });
           if (msg.event === 'info') await setState({ lastInfo: msg.info ?? null, lastInfoAt: Date.now() });
-          if (msg.event === 'progress') await setState({ progress: msg.progress });
+          if (msg.event === 'progress') await setState({ progress: msg.progress, progressAt: Date.now() });
+          if (msg.event === 'fatal') {
+            // Offscreen already stopped the session (write failure). Files are kept; status = error.
+            const s = await getState();
+            await setState({ status: 'error', error: msg.error, errorRaw: JSON.stringify(msg.fatal ?? null),
+                             sessionId: null, startedAt: null, progress: null, lastResult: msg.result ?? null,
+                             stoppedByFatal: { sessionId: s.sessionId, at: Date.now(), fatal: msg.fatal ?? null } });
+            await closeOffscreenIfIdle();
+          }
           return sendResponse({ ok: true });
         }
+        case 'RECOVER_SESSION': return sendResponse(await recoverSession(msg.sessionId, { manual: true, opts: msg.opts }));
+        case 'GET_RECOVERY':    return sendResponse({ ok: true, recovery: (await chrome.storage.local.get(RECOVERY_KEY))[RECOVERY_KEY] ?? null });
         case 'DEBUG_OFFSCREEN': {
           // Test bench only: forward a DEBUG command to the offscreen document.
           const r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'DEBUG', what: msg.what, role: msg.role, sampleRate: msg.sampleRate });
@@ -311,7 +328,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true;
 });
 
-// ─────────────────────────────────────── восстановление после сбоя ──
+// ───────────────────────────────── прерванная запись: обнаружение и проверка ──
+//
+// Слово «восстановление» здесь не употребляется намеренно: до заполнения таблицы
+// ADR-004 (стратегия × авария → секунд потеряно, декодируется ли целиком) обещать
+// нечего. Что делается: файлы прерванной сессии ПРОВЕРЯЮТСЯ декодированием и, если
+// разрешено, приводятся к законченному виду (EOS для Ogg, ремукс частей MediaRecorder).
+// Результат — числа в recovery.json и в ironmemo.recovery.v1, не обещание.
 
 chrome.runtime.onStartup.addListener(checkForOrphanedSession);
 chrome.runtime.onInstalled.addListener(checkForOrphanedSession);
@@ -320,14 +343,70 @@ async function checkForOrphanedSession() {
   const s = await getState();
   if (s.status === 'recording' || s.status === 'paused' || s.status === 'starting'
       || s.status === 'awaiting_perm') {
+    const detectedAt = Date.now();
     await setState({
       status: 'idle',
-      orphaned: s.sessionId ? { sessionId: s.sessionId, startedAt: s.startedAt, detectedAt: Date.now() } : null,
+      orphaned: s.sessionId ? { sessionId: s.sessionId, startedAt: s.startedAt, detectedAt, recovery: null } : null,
       error: null,
     });
     if (s.sessionId) {
       await chrome.action.setBadgeText({ text: '?' });
       await chrome.action.setBadgeBackgroundColor({ color: '#f0a238' });
+      const settings = (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY] ?? {};
+      if (getByPath(settings, 'recovery.autoRecoverOnStart') ?? true) {
+        await recoverSession(s.sessionId, { manual: false });
+      }
     }
   }
 }
+
+/**
+ * Run the check of one session in the offscreen document (recovery-worker.js) and keep
+ * a compact summary in storage for the popup. Timed: the I2 matrix reports the wall time.
+ */
+async function recoverSession(sessionId, { manual = false, opts = {} } = {}) {
+  const t0 = Date.now();
+  const cur = await getState();
+  if (cur.status === 'recording' || cur.status === 'paused' || cur.status === 'starting') {
+    return { ok: false, error: 'Идёт запись — проверка прерванной записи отложена.' };
+  }
+  let summary;
+  try {
+    // The offscreen document cannot read chrome.storage: resolve the options here.
+    const settings = (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY] ?? {};
+    const resolved = {
+      remux: getByPath(settings, 'recovery.remuxOnRecover') ?? true,
+      validate: getByPath(settings, 'recovery.validateDecodeAfterRemux') ?? true,
+      muxerGapFillMs: getByPath(settings, 'storage.muxerGapFillMs') ?? 40,
+      ...(opts ?? {}),
+    };
+    await ensureOffscreen({ purpose: 'recovery' });
+    const r = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'RECOVER', sessionId, opts: resolved });
+    summary = summarizeRecovery(sessionId, r, Date.now() - t0, manual);
+  } catch (e) {
+    summary = { sessionId, at: Date.now(), ms: Date.now() - t0, ok: false, error: String(e?.message ?? e), manual };
+  }
+  await chrome.storage.local.set({ [RECOVERY_KEY]: summary });
+  const s = await getState();
+  if (s.orphaned?.sessionId === sessionId) await setState({ orphaned: { ...s.orphaned, recovery: summary } });
+  await closeOffscreenIfIdle();
+  return { ok: summary.ok, recovery: summary };
+}
+
+function summarizeRecovery(sessionId, r, ms, manual) {
+  if (!r?.ok) return { sessionId, at: Date.now(), ms, ok: false, error: r?.error ?? 'нет ответа от offscreen', manual };
+  const res = r.result ?? {};
+  const roles = {};
+  for (const [role, x] of Object.entries(res.perRole ?? {})) {
+    roles[role] = {
+      action: x.action, secondsOnDisk: round1(x.secondsOnDisk), secondsDecoded: x.secondsDecoded == null ? null : round1(x.secondsDecoded),
+      decodesFully: x.decode?.ok ?? null, error: x.error ?? x.decode?.error ?? null, ms: x.ms,
+      fillerPackets: x.fillerPackets ?? 0, trimmedPackets: x.trimmedPackets ?? 0, parts: x.parts ?? null, segments: x.segments ?? null,
+    };
+  }
+  return { sessionId, at: Date.now(), ms, ok: !!res.ok, skipped: res.skipped ?? null, engine: res.engine ?? null,
+           orphaned: res.orphaned ?? null, roles, journalCheck: res.journalCheck ?? null, error: res.error ?? null,
+           workerMs: res.ms ?? null, manual };
+}
+
+const round1 = (v) => Math.round(v * 10) / 10;

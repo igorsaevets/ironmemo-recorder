@@ -41,7 +41,7 @@
  *   requires    условие показа: {key, equals|notEquals|includes}
  */
 
-export const SETTINGS_SCHEMA_VERSION = '0.2.0';
+export const SETTINGS_SCHEMA_VERSION = '0.3.0';
 
 export const GROUPS = [
   { id: 'source',     title: 'Источники звука',            order: 10 },
@@ -209,6 +209,21 @@ export const SETTINGS = [
     requires: { key: 'source.onDeviceLost', equals: 'pause_and_notify' },
     decides: 'ADR-003',
     readback: 'journal: device_returned.silenceFrames',
+  },
+  {
+    key: 'source.frozenInputTimeoutMs', group: 'source', type: 'int', stage: 'experiment',
+    label: 'Считать вход замёрзшим, если нет кадров дольше, мс', default: 3000, min: 500, max: 60000, step: 500,
+    why: 'Реальное событие 07.09.2026 (зависание службы Windows Audio, long-4h/journal.jsonl): дорожка '
+       + 'осталась `live`, кадры перестали приходить, статус остался `recording` — тихий отказ. Worker '
+       + 'проверяет раз в секунду, когда последний AudioData пришёл по каждой роли; дольше этого порога '
+       + '— событие input_frozen, предупреждение пользователю; при возобновлении кадров пропуск заполняется '
+       + 'тишиной (даже длиннее 5 с — в отличие от обычного скачка timestamp), чтобы дорожки остались на одной шкале. '
+       + 'Это НЕ случай «устройство занято при старте» (NotReadableError, Kaspersky 07.09.2026): тот отказ '
+       + 'виден до входа в конвейер и обрабатывается ошибкой старта, а не детектором.',
+    risk: 'Слишком мало — ложные тревоги на паузах GC и при выгрузке; измерено 07–08.09.2026: штатные '
+        + 'пропуски входа не длиннее 260 мс (synth-44k1-30m), а потери tabCapture — 23 мс.',
+    decides: 'ADR-004',
+    readback: 'journal: input_frozen / input_resumed; capture-report roles.*.frozenEvents',
   },
 
   // ────────────────────────────────────────────── ОБРАБОТКА МИКРОФОНА ──
@@ -534,7 +549,23 @@ export const SETTINGS = [
     why: 'Прямо задаёт максимальную потерю при аварии и число файлов на диске.',
     requires: { key: 'storage.segmentStrategy', equals: 'rolling_finalized' },
     decides: 'ADR-004',
-    readback: null,
+    readback: 'journal: segment_start / segment_stop на каждую роль',
+  },
+  {
+    key: 'storage.rollingHandover', group: 'storage', type: 'enum', stage: 'experiment',
+    label: 'Стык сегментов (rolling_finalized)', default: 'start_then_stop',
+    options: [
+      { value: 'stop_then_start', label: 'Остановить старый, потом запустить новый',
+        hint: 'простая передача', risk: 'Кадры между stop() и start() теряются — дыра на стыке.' },
+      { value: 'start_then_stop', label: 'Запустить новый, потом остановить старый',
+        hint: 'нет дыры, есть нахлёст', risk: 'Нахлёст надо срезать при сборке по журналу времени старта.' },
+    ],
+    why: 'Гипотеза И-2: «каждый сегмент — валидный файл, но на стыке возможна дыра». Два MediaRecorder на '
+       + 'одном MediaStream Chrome допускает, поэтому стык можно сделать с нахлёстом. Что реально теряется '
+       + 'или дублируется — измеряется по журналу (segment_handover) и по декодированию собранного файла.',
+    requires: { key: 'storage.segmentStrategy', equals: 'rolling_finalized' },
+    decides: 'ADR-004',
+    readback: 'journal: segment_handover.{gapMs|overlapMs}; recovery.json: trimmedSamples / fillerSamples',
   },
   {
     key: 'storage.timesliceMs', group: 'storage', type: 'int', stage: 'experiment',
@@ -611,17 +642,21 @@ export const SETTINGS = [
   },
   {
     key: 'recovery.remuxOnRecover', group: 'recovery', type: 'bool', stage: 'experiment',
-    label: 'Пересобирать контейнер при восстановлении', default: true,
-    why: 'Побайтовая склейка WebM-чанков НЕ является корректным восстановлением. Нужен ремукс.',
-    decides: 'ADR-004', readback: null,
+    label: 'Пересобирать контейнер при обработке оборванной записи', default: true,
+    why: 'Побайтовая склейка WebM-чанков НЕ является корректным восстановлением: ffmpeg читает её до последнего '
+       + 'целого блока (измерено И-1), но длительности в файле нет, а сегменты rolling_finalized несут по '
+       + 'собственному EBML-заголовку каждый. Обработка (recovery.js): WebM-части → пакеты Opus → свой Ogg-muxer '
+       + 'на шкале журнала (стык заполняется тишиной или срезается); Ogg с пути WebCodecs → срез неполной '
+       + 'страницы + страница EOS. Выключено — файлы только проверяются, но не переписываются.',
+    decides: 'ADR-004', readback: 'recovery.json: perRole.*.{action, packets, fillerSamples, trimmedSamples}',
   },
   {
     key: 'recovery.validateDecodeAfterRemux', group: 'recovery', type: 'bool', stage: 'mvp',
     label: 'Проверять декодированием весь файл', default: true,
-    why: 'Единственное доказательство успешного восстановления — файл декодируется ЦЕЛИКОМ, '
-       + 'а не открывается в плеере первые три секунды.',
-    risk: 'Выключение превращает «восстановлено» в непроверенное утверждение.',
-    decides: 'ADR-004', readback: null,
+    why: 'Единственное доказательство успешной обработки — файл декодируется ЦЕЛИКОМ (AudioDecoder считает '
+       + 'сэмплы против granulepos), а не открывается в плеере первые три секунды.',
+    risk: 'Выключение превращает «декодируется» в непроверенное утверждение.',
+    decides: 'ADR-004', readback: 'recovery.json: perRole.*.decode.{decodedFrames, expectedSamples, ok}',
   },
 
   // ────────────────────────────────────────────────────── ОТПРАВКА ──
@@ -903,6 +938,11 @@ export function validate(values) {
   if (g('audioEnc.impl') !== 'webcodecs' && g('audioEnc.container') === 'ogg') {
     issues.push({ level: 'error', key: 'audioEnc.container',
       text: 'Ogg через MediaRecorder в Chrome не поддерживается (измерено 07.09.2026). Ogg доступен только на пути WebCodecs.' });
+  }
+  if (g('audioEnc.impl') !== 'webcodecs' && g('storage.segmentStrategy') === 'rolling_finalized'
+      && g('storage.segmentSeconds') * 1000 < g('storage.timesliceMs')) {
+    issues.push({ level: 'warn', key: 'storage.segmentSeconds',
+      text: 'Сегмент короче timeslice: каждый сегмент будет из одного чанка, стыки — чаще, чем точки сохранения.' });
   }
   if (g('audioEnc.opusUseDTX') && g('storage.segmentStrategy') === 'continuous') {
     issues.push({ level: 'warn', key: 'audioEnc.opusUseDTX',
