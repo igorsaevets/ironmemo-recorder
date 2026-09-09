@@ -35,6 +35,8 @@ async function init() {
     e.preventDefault();
     chrome.tabs.create({ url: chrome.runtime.getURL('src/lab/lab.html') });
   });
+  $('openSessions').addEventListener('click', () =>
+    chrome.tabs.create({ url: chrome.runtime.getURL('src/session-list/session-list.html') }));
   $('openPermission').addEventListener('click', () =>
     chrome.runtime.sendMessage({ target: 'background', type: 'OPEN_PERMISSION' }));
 

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>IronMemo — Записи</title>
+  <link rel="stylesheet" href="session-list.css">
+</head>
+<body>
+  <header>
+    <h1>Записи</h1>
+    <div class="sub">Локальные записи в браузере. Файлы хранятся в OPFS расширения — не в файловой системе.</div>
+  </header>
+
+  <div id="status" class="status" hidden></div>
+
+  <div id="empty" class="empty" hidden>
+    <div class="empty-title">Записей нет</div>
+    <div class="empty-hint">Нажмите иконку расширения на панели Chrome, затем «Начать запись».</div>
+  </div>
+
+  <div id="list"></div>
+
+  <footer>
+    <div>Всего сессий: <span id="totalCount">0</span> · На диске: <span id="totalSize">0</span></div>
+    <button id="refresh" class="btn ghost">Обновить</button>
+  </footer>
+
+  <script type="module" src="session-list.js"></script>
+</body>
+</html>

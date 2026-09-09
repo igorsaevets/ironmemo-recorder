@@ -29,6 +29,8 @@ body { width: 320px; margin: 0; padding: 14px; background: var(--bg); color: var
 .wave { display: block; width: 100%; height: 60px; margin-bottom: 12px;
         background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
 
+.btn.wide { width: 100%; margin-top: 12px; }
+
 .err, .orphan { margin-top: 11px; padding: 9px 11px; border-radius: 8px; font-size: 11.5px; }
 .err { background: rgba(239,95,107,.1); border: 1px solid rgba(239,95,107,.4); color: #ffc7cc; }
 .orphan { background: rgba(240,162,56,.1); border: 1px solid rgba(240,162,56,.4); color: #ffd9a0; }
