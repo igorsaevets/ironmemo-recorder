@@ -57,6 +57,9 @@ body { width: 320px; margin: 0; padding: 14px; background: var(--bg); color: var
 .consent .check span { flex: 1; }
 .consent button.primary { width: 100%; padding: 10px; font-weight: 600; }
 .consent button.primary:disabled { opacity: .4; cursor: not-allowed; }
+.consent .privacy { display: block; text-align: center; font-size: 11.5px; color: var(--muted);
+                    text-decoration: underline; padding-top: 4px; }
+.consent .privacy:hover { color: var(--accent); }
 .consent details.en { font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
 .consent details.en summary { cursor: pointer; padding: 4px 0; color: var(--text); }
 .consent details.en p { font-size: 11px; color: var(--muted); margin-top: 6px; }

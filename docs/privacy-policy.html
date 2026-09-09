@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="index,follow">
+<title>Privacy Policy — IronMemo Audio Recorder</title>
+<style>
+  :root { color-scheme: light dark; }
+  html { font: 16px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { max-width: 720px; margin: 40px auto; padding: 0 20px; color: #1f2328; background: #ffffff; }
+  @media (prefers-color-scheme: dark) { body { color: #e6e8ee; background: #0f1115; } }
+  h1 { font-size: 28px; margin: 0 0 8px; }
+  h2 { font-size: 20px; margin: 32px 0 8px; }
+  h3 { font-size: 16px; margin: 20px 0 6px; }
+  p, li { margin: 8px 0; }
+  code { background: rgba(120,120,120,.12); padding: 1px 5px; border-radius: 4px; font-size: 14px; }
+  .meta { color: #6a737d; font-size: 14px; margin-bottom: 24px; }
+  a { color: #0969da; }
+  @media (prefers-color-scheme: dark) { a { color: #4f7cff; } }
+  hr { border: 0; border-top: 1px solid rgba(120,120,120,.3); margin: 32px 0; }
+</style>
+</head>
+<body>
+<h1>Privacy Policy — IronMemo Audio Recorder</h1>
+<p class="meta">Effective date: 9 September 2026 · <a href="./">Back to home</a></p>
+
+<p>IronMemo Audio Recorder ("the extension") is a Chrome extension that records microphone and browser tab audio on the user's own device. This policy explains exactly what data the extension handles and what it does <em>not</em> do.</p>
+
+<h2>1. Data the extension handles</h2>
+<p>The extension handles three categories of data:</p>
+<ul>
+  <li><strong>Microphone audio</strong> — captured only during a recording that the user has explicitly started. Classified by the Chrome Web Store as <em>Personal communications</em>.</li>
+  <li><strong>Browser tab audio</strong> — captured only during a recording that the user has explicitly started, and only from the specific tab the user chose. Classified by the Chrome Web Store as <em>Website content</em>.</li>
+  <li><strong>Extension settings and consent state</strong> — small key/value pairs (recording preferences, consent version, timestamps) stored in <code>chrome.storage.local</code>. Classified as <em>Website content</em>.</li>
+</ul>
+
+<p>The extension does <strong>not</strong> handle any of the following: web browsing history, form input, passwords, personally identifying information beyond what the user chooses to speak into the microphone, location, health data, financial information, authentication credentials, or personal communications outside of the user-initiated recording.</p>
+
+<h2>2. Where the data is stored</h2>
+<p>All recorded audio and settings stay on the user's device. Recorded audio is written to the browser's Origin Private File System (OPFS), which is a private storage area for the extension's origin. Nothing is uploaded to any server, and the extension performs no network requests to any external service.</p>
+
+<p>The extension's manifest declares no host permissions and makes no <code>fetch</code>, <code>XMLHttpRequest</code>, or <code>WebSocket</code> calls. This is enforceable from source: the repository at <a href="https://github.com/igorsaevets/ironmemo-recorder">github.com/igorsaevets/ironmemo-recorder</a> is public and auditable.</p>
+
+<h2>3. Retention and deletion</h2>
+<p>Recordings remain in local storage until the user deletes them. Deletion is available from the "Записи" (Recordings) page in the extension: each recording has a "Удалить сессию" (Delete session) button. Uninstalling the extension deletes all recordings and all settings.</p>
+
+<p>There is no server-side copy to retain or delete, because nothing is uploaded.</p>
+
+<h2>4. Sharing</h2>
+<p>The extension does not sell, transfer, or share any user data. There is no third-party service, no analytics provider, no advertising network, and no crash-reporting service. There is no way for the extension author or anyone else to access recordings on the user's device.</p>
+
+<h2>5. AI and model training</h2>
+<p>The extension does not use recordings for artificial-intelligence processing, training, transcription, summarization, or any related purpose. If a future version of the extension adds an AI feature, that feature will be opt-in and disclosed in the extension's consent screen before it is activated. The current version has no such feature.</p>
+
+<h2>6. Recording consent and user responsibility</h2>
+<p>The extension shows a consent screen on first use that summarizes what it does and what it does not do. By starting a recording, the user confirms that they have the right to record all participants in the meeting under the law of their jurisdiction. Recording laws differ substantially between countries and, within the United States, between states — the user is responsible for compliance with the law that applies to them.</p>
+
+<h2>7. Permissions used, and why</h2>
+<ul>
+  <li><code>tabCapture</code> — required to record audio from the tab the user selects.</li>
+  <li><code>offscreen</code> — required by Manifest V3 to hold the recording pipeline while the popup is closed.</li>
+  <li><code>storage</code> — required to save recording settings and consent state in <code>chrome.storage.local</code>.</li>
+  <li><code>unlimitedStorage</code> — required so long recordings are not truncated by Chrome's default quota (approximately 60 megabytes per hour of Opus 48 kbps audio; a full workday of recording exceeds the default quota).</li>
+</ul>
+
+<p>The extension declares no host permissions and no optional permissions. The full <code>manifest.json</code> is visible in the public repository linked above.</p>
+
+<h2>8. Contact</h2>
+<p>Author: Igor Saevets. Email: <a href="mailto:igorsaevets@gmail.com">igorsaevets@gmail.com</a>. Issue tracker: <a href="https://github.com/igorsaevets/ironmemo-recorder/issues">github.com/igorsaevets/ironmemo-recorder/issues</a>.</p>
+
+<h2>9. Changes to this policy</h2>
+<p>If the extension's data-handling practices change, this page will be updated and the extension's consent screen will be shown again automatically, so that users must accept the new terms before continuing to record. The consent screen carries a version number that is incremented for exactly this purpose.</p>
+
+<hr>
+<p class="meta">This policy is written in plain English on purpose. If any part of it is unclear, please open an issue on the repository and it will be revised.</p>
+</body>
+</html>

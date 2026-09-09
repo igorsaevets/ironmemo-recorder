@@ -1,0 +1,14 @@
+{
+  "extensionName": {
+    "message": "IronMemo Audio Recorder",
+    "description": "Название расширения в Chrome и Chrome Web Store."
+  },
+  "extensionDescription": {
+    "message": "Локальная запись микрофона и звука вкладки для встреч и звонков. Работает при закрытой вкладке. Декодирует файл после сбоев Chrome.",
+    "description": "Короткое описание для магазина, до 132 символов."
+  },
+  "actionTitle": {
+    "message": "IronMemo Audio Recorder",
+    "description": "Всплывающая подсказка на иконке в панели."
+  }
+}

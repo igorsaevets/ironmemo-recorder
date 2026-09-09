@@ -8,8 +8,8 @@ let timerHandle = null;
 // Bumping the version key forces the overlay to reappear on the next popup open,
 // which is how Purple Nickel wants a change in data practices communicated.
 const CONSENT_KEY = 'ironmemo.consent.v1';
-const CONSENT_VERSION = 3;
-const CONSENT_TEXT_ID = 'ru-en-v3';
+const CONSENT_VERSION = 4;
+const CONSENT_TEXT_ID = 'ru-en-v4-policy-link';
 
 // Живая волна микрофона в popup, чтобы юзер видел «звук приходит» и не получил пустой
 // файл, если mic заблокирован драйвером/системой (Kaspersky, audiosrv hang, mute).
@@ -194,7 +194,7 @@ function orphanText(o) {
     return `${name} — ${fmt(sec)}${x.decodesFully === true ? ', декодируется целиком' : x.decodesFully === false ? ', ДЕКОДИРУЕТСЯ НЕ ЦЕЛИКОМ' : ''}`;
   });
   return `Запись от ${when} была прервана без остановки. На диске: ${parts.join('; ')}. `
-       + `Проверка заняла ${(r.ms / 1000).toFixed(1)} с. Файлы — в «Проба возможностей → Сессии».`;
+       + `Проверка заняла ${(r.ms / 1000).toFixed(1)} с. Откройте страницу «Записи» ниже, чтобы скачать восстановленный файл.`;
 }
 
 async function startWave() {

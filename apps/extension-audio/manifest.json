@@ -1,9 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "IronMemo Audio Recorder",
-  "version": "0.3.3",
-  "description": "Локальная запись микрофона и звука вкладки для встреч и звонков. Работает при закрытой вкладке. Декодирует файл после сбоев Chrome.",
+  "name": "__MSG_extensionName__",
+  "version": "0.4.0",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "en",
   "minimum_chrome_version": "116",
+  "author": "Igor Saevets",
+  "homepage_url": "https://igorsaevets.github.io/ironmemo-recorder/",
 
   "permissions": [
     "tabCapture",
@@ -16,11 +19,6 @@
 
   "host_permissions": [],
 
-  "optional_host_permissions": [
-    "http://localhost/*",
-    "http://127.0.0.1/*"
-  ],
-
   "background": {
     "service_worker": "src/background/service-worker.js",
     "type": "module"
@@ -28,7 +26,7 @@
 
   "action": {
     "default_popup": "src/popup/popup.html",
-    "default_title": "IronMemo Audio Recorder"
+    "default_title": "__MSG_actionTitle__"
   },
 
   "options_page": "src/options/options.html",
