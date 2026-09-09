@@ -40,15 +40,23 @@ body { width: 320px; margin: 0; padding: 14px; background: var(--bg); color: var
 .foot a { color: var(--muted); text-decoration: none; font-size: 11.5px; }
 .foot a:hover { color: var(--accent); }
 
-.consent { display: flex; flex-direction: column; gap: 10px; }
+/* [hidden] must beat .consent's display:flex — same specificity, later rule wins.
+ * v0.3.2 shipped without this and the overlay stayed on screen after «Продолжить». */
+.consent { display: flex; flex-direction: column; gap: 0; max-height: 560px; }
+.consent[hidden] { display: none; }
+.consent-scroll { flex: 1 1 auto; overflow-y: auto; padding-right: 6px;
+                  display: flex; flex-direction: column; gap: 10px; }
+.consent-actions { flex: 0 0 auto; display: flex; flex-direction: column; gap: 10px;
+                   padding-top: 12px; margin-top: 10px;
+                   border-top: 1px solid var(--line); background: var(--bg); }
 .consent h2 { font-size: 13px; margin: 0; color: var(--accent); font-weight: 600; }
 .consent p { font-size: 12px; line-height: 1.5; margin: 0; color: var(--text); }
 .consent .check { display: flex; gap: 8px; align-items: flex-start; font-size: 12px;
                   padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
 .consent .check input { margin-top: 2px; accent-color: var(--accent); }
 .consent .check span { flex: 1; }
-.consent button.primary { width: 100%; }
+.consent button.primary { width: 100%; padding: 10px; font-weight: 600; }
 .consent button.primary:disabled { opacity: .4; cursor: not-allowed; }
-.consent details.en { font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
-.consent details.en summary { cursor: pointer; padding: 4px 0; }
+.consent details.en { font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
+.consent details.en summary { cursor: pointer; padding: 4px 0; color: var(--text); }
 .consent details.en p { font-size: 11px; color: var(--muted); margin-top: 6px; }

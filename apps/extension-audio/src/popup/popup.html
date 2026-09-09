@@ -6,21 +6,25 @@
 </head>
 <body>
   <div id="consent" class="consent" hidden>
-    <h2>О расширении IronMemo</h2>
-    <p>IronMemo записывает звук микрофона и вкладок <b>локально в вашем браузере</b>. Файлы хранятся в браузерном хранилище (OPFS) на этом устройстве, пока вы не удалите их на странице «Записи». IronMemo ничего не отправляет на сервер без вашего явного запроса. Расширение не читает текст страниц, пароли или историю — только тот звук, который вы выбираете захватить. Расширение не использует ИИ на ваших записях без вашего отдельного разрешения.</p>
-    <p>Категории данных, которые обрабатывает расширение: голос микрофона (Personal communications) и звук вкладки (Website content).</p>
-    <p>Начиная запись, вы подтверждаете, что имеете право записывать всех участников встречи в вашей юрисдикции.</p>
-    <label class="check">
-      <input type="checkbox" id="consentAgree">
-      <span>Я согласен и продолжаю</span>
-    </label>
-    <button id="consentContinue" class="btn primary" disabled>Продолжить</button>
-    <details class="en" open>
-      <summary>English</summary>
-      <p>IronMemo records microphone and tab audio <b>locally in your browser</b>. Files stay in the browser's storage (OPFS) on this device until you delete them from the «Записи» page. IronMemo does not send anything to a server without your explicit request. The extension does not read page text, passwords or history — only the audio you choose to capture. It does not run AI on your recordings without your separate permission.</p>
-      <p>Data categories: microphone voice (Personal communications) and tab audio (Website content).</p>
-      <p>By starting a recording, you confirm you have the right to record all meeting participants under the law of your jurisdiction.</p>
-    </details>
+    <div class="consent-scroll">
+      <h2>О расширении IronMemo</h2>
+      <p>IronMemo записывает звук микрофона и вкладок <b>локально в вашем браузере</b>. Файлы хранятся в браузерном хранилище (OPFS) на этом устройстве, пока вы не удалите их на странице «Записи». IronMemo ничего не отправляет на сервер без вашего явного запроса. Расширение не читает текст страниц, пароли или историю — только тот звук, который вы выбираете захватить. Расширение не использует ИИ на ваших записях без вашего отдельного разрешения.</p>
+      <p>Категории данных: голос микрофона (Personal communications), звук вкладки (Website content).</p>
+      <p>Начиная запись, вы подтверждаете, что имеете право записывать всех участников встречи в вашей юрисдикции.</p>
+      <details class="en" open>
+        <summary>English version</summary>
+        <p>IronMemo records microphone and tab audio <b>locally in your browser</b>. Files stay in the browser's storage (OPFS) on this device until you delete them from the «Записи» page. IronMemo does not send anything to a server without your explicit request. The extension does not read page text, passwords or history — only the audio you choose to capture. It does not run AI on your recordings without your separate permission.</p>
+        <p>Data categories: microphone voice (Personal communications), tab audio (Website content).</p>
+        <p>By starting a recording, you confirm you have the right to record all meeting participants under the law of your jurisdiction.</p>
+      </details>
+    </div>
+    <div class="consent-actions">
+      <label class="check">
+        <input type="checkbox" id="consentAgree">
+        <span>Я согласен и продолжаю</span>
+      </label>
+      <button id="consentContinue" class="btn primary" disabled>Продолжить</button>
+    </div>
   </div>
 
   <div id="app" hidden>
