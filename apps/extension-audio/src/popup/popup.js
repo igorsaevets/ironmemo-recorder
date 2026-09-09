@@ -4,6 +4,11 @@ import { getByPath, estimateMBPerHour } from '../shared/settings-schema.js';
 const $ = (id) => document.getElementById(id);
 let timerHandle = null;
 
+// Живая волна микрофона в popup, чтобы юзер видел «звук приходит» и не получил пустой
+// файл, если mic заблокирован драйвером/системой (Kaspersky, audiosrv hang, mute).
+// Второй getUserMedia в popup — Chrome шарит mic между контекстами одного origin.
+const WAVE = { stream: null, ctx: null, an: null, raf: 0, starting: false, err: null };
+
 init();
 
 async function init() {
@@ -87,6 +92,8 @@ async function refresh() {
   $('pause').textContent = paused ? 'Продолжить' : 'Пауза';
   $('start').disabled = $('pause').disabled = $('stop').disabled = false;
 
+  if (rec) startWave(); else stopWave();
+
   if (s.error) showError(s.error); else { $('err').hidden = true; $('errActions').hidden = true; }
   // Warnings while recording (device lost/returned, tab capture ended) do not change the
   // status; they arrive as lastWarning/lastInfo from the offscreen document.
@@ -141,6 +148,66 @@ function orphanText(o) {
   });
   return `Запись от ${when} была прервана без остановки. На диске: ${parts.join('; ')}. `
        + `Проверка заняла ${(r.ms / 1000).toFixed(1)} с. Файлы — в «Проба возможностей → Сессии».`;
+}
+
+async function startWave() {
+  if (WAVE.stream || WAVE.starting || WAVE.err) return;
+  WAVE.starting = true;
+  try {
+    const settings = await loadSettings();
+    const mode = getByPath(settings, 'source.mode');
+    if (mode === 'tab') { WAVE.starting = false; return; }
+    const deviceId = getByPath(settings, 'audioProc.deviceId') || undefined;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        deviceId: deviceId ? { exact: deviceId } : undefined,
+        echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+      },
+      video: false,
+    });
+    const ctx = new AudioContext();
+    const src = ctx.createMediaStreamSource(stream);
+    const an = ctx.createAnalyser();
+    an.fftSize = 2048;
+    src.connect(an);
+    WAVE.stream = stream; WAVE.ctx = ctx; WAVE.an = an;
+    const canvas = $('wave');
+    canvas.hidden = false;
+    const c2d = canvas.getContext('2d');
+    const buf = new Uint8Array(an.fftSize);
+    const draw = () => {
+      if (!WAVE.stream) return;
+      an.getByteTimeDomainData(buf);
+      const W = canvas.width, H = canvas.height;
+      c2d.fillStyle = '#1d212a';
+      c2d.fillRect(0, 0, W, H);
+      c2d.lineWidth = 2;
+      c2d.strokeStyle = '#4f7cff';
+      c2d.beginPath();
+      for (let i = 0; i < buf.length; i++) {
+        const x = (i / buf.length) * W;
+        const y = (buf[i] / 255) * H;
+        i === 0 ? c2d.moveTo(x, y) : c2d.lineTo(x, y);
+      }
+      c2d.stroke();
+      WAVE.raf = requestAnimationFrame(draw);
+    };
+    WAVE.raf = requestAnimationFrame(draw);
+  } catch (e) {
+    WAVE.err = e?.name ?? String(e);
+  } finally {
+    WAVE.starting = false;
+  }
+}
+
+function stopWave() {
+  if (WAVE.raf) cancelAnimationFrame(WAVE.raf);
+  WAVE.raf = 0;
+  if (WAVE.stream) WAVE.stream.getTracks().forEach((t) => t.stop());
+  if (WAVE.ctx && WAVE.ctx.state !== 'closed') WAVE.ctx.close().catch(() => {});
+  WAVE.stream = WAVE.ctx = WAVE.an = null;
+  const canvas = $('wave');
+  if (canvas) canvas.hidden = true;
 }
 
 function showError(msg) {
