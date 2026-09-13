@@ -17,7 +17,9 @@
 
 import { loadSettings } from '../shared/settings-store.js';
 import { getByPath } from '../shared/settings-schema.js';
-import { IngestController } from '../ingest/controller.js';
+import { IngestController, waitingSince } from '../ingest/controller.js';
+import { FILES, isTranscriptFile, formatStamp } from '../ingest/transcript.js';
+import { S, reasonText } from '../shared/strings.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -140,7 +142,7 @@ async function listSessions() {
         // MediaRecorder continuous:       <role>.000.NNNNNN.part
         if (f.name.startsWith(`${role}.`) && f.name.endsWith('.part')) { groups[role].parts.push(f); matched = true; break; }
       }
-      if (!matched && f.name !== 'capture-report.json' && f.name !== 'journal.jsonl' && f.name !== 'recovery.json') otherFiles.push(f);
+      if (!matched && f.name !== 'capture-report.json' && f.name !== 'journal.jsonl' && f.name !== 'recovery.json' && !isTranscriptFile(f.name)) otherFiles.push(f);
     }
 
     // Sort .part chunks by segment/seq
@@ -188,7 +190,7 @@ async function listSessions() {
 
     const engine = report?.engine ?? null;
 
-    out.push({ sid, bytes, files, groups, otherFiles, startedAt, durationSec, status, engine, report, recovery });
+    out.push({ sid, bytes, files, groups, otherFiles, transcriptFiles: files.filter((f) => isTranscriptFile(f.name)), startedAt, durationSec, status, engine, report, recovery });
   }
 
   out.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
@@ -332,11 +334,10 @@ function renderRoleRow(role, g) {
 
 // ─────────────────────────────────────────────────── I4a: ingest block per session ──
 
-const STATE_TEXT = {
-  session: 'Connecting to IronMemo…',
-  creating: 'Creating the recording on IronMemo…',
-  finalizing: 'Finishing the upload…',
-};
+const PREVIEW_LINES = 20;
+const NO_RETRY = ['too_large', 'too_long', 'unsupported', 'no_mix', 'multi_segment', 'no_file', 'recovered_invalid', 'payment', 'insufficient_credits'];
+const expandedSids = new Set();               // transcript panels the user expanded ("Show all")
+const transcriptTextCache = new Map();        // sid → {sha, body: string[]} (transcript.txt minus the header)
 
 function renderIngest(el, s) {
   const box = el.querySelector('.ingest');
@@ -345,120 +346,194 @@ function renderIngest(el, s) {
   const running = ingest.isRunning(s.sid);
   box.hidden = false;
 
-  let status = '', cls = 'muted', hint = '', progress = null, buttons = [];
+  let status = '', cls = 'muted', hint = '', progress = null, panel = false;
+  const buttons = [], banners = [];
   const st = job?.state ?? null;
+  const id8 = job?.recordingId ? job.recordingId.slice(0, 8) : '';
 
   if (!job || (st === 'cancelled' && !job.recordingId)) {
-    status = 'Get a transcript from IronMemo.';
-    hint = 'Sends this one recording to your IronMemo account. First 10 minutes free.';
-    buttons.push(['transcribe', 'Transcribe with IronMemo', 'primary']);
+    status = S.idleStatus; hint = escapeHtml(S.idleHint);
+    buttons.push(['transcribe', S.btnTranscribe, 'primary']);
   } else if (st === 'cancelled') {
-    status = job.stateReason === 'local_deleted' ? 'Upload cancelled: the local files were deleted.' : 'Upload cancelled.';
-    hint = job.recordingId ? `An empty recording may remain on IronMemo (id ${job.recordingId.slice(0, 8)}…).` : '';
-    buttons.push(['transcribe', 'Transcribe again', '']);
+    status = job.stateReason === 'local_deleted' ? S.cancelledLocalDeleted : S.cancelled;
+    hint = escapeHtml(S.cancelledServerRemain(id8));
+    buttons.push(['transcribe', S.btnTranscribeAgain, '']);
   } else if (st === 'session' || st === 'creating' || st === 'finalizing') {
-    status = STATE_TEXT[st];
-    if (job.stateReason === 'workspace_wait') hint = 'IronMemo is preparing a workspace for your guest account — this can take a minute or two.';
-    buttons.push(['ingest-cancel', 'Cancel', 'danger']);
+    status = S.stateText[st];
+    if (job.stateReason === 'workspace_wait') hint = escapeHtml(S.workspaceWait);
+    buttons.push(['ingest-cancel', S.btnCancel, 'danger']);
   } else if (st === 'create_unknown') {
-    cls = 'error';
-    status = 'Could not confirm whether the recording was created on IronMemo.';
-    hint = 'Retry checks the server for this recording before creating it again.';
-    buttons.push(['ingest-retry', 'Retry', 'primary'], ['ingest-cancel', 'Cancel', 'danger']);
+    cls = 'error'; status = S.createUnknown; hint = escapeHtml(S.createUnknownHint);
+    buttons.push(['ingest-retry', S.btnRetry, 'primary'], ['ingest-cancel', S.btnCancel, 'danger']);
   } else if (st === 'uploading') {
     const total = job.asset?.bytes ?? 0;
     const sent = Math.min(total, job.bytesSent ?? 0);
     const pct = total ? Math.floor((sent / total) * 100) : 0;
     const done = (job.parts ?? []).filter((p) => p.etag).length;
     status = job.transport === 'multipart'
-      ? `Uploading ${pct}% — part ${Math.min(done + 1, job.parts.length)} of ${job.parts.length}`
-      : `Uploading ${pct}% (${formatBytes(sent)} of ${formatBytes(total)})`;
+      ? S.uploadingMultipart(pct, Math.min(done + 1, job.parts.length), job.parts.length)
+      : S.uploadingSingle(pct, formatBytes(sent), formatBytes(total));
     progress = total ? sent / total : 0;
-    hint = running ? 'Keep this tab open. If you close it, reopen Recordings to continue where it stopped.' : 'Not running in this tab.';
-    if (running) buttons.push(['ingest-pause', 'Pause', '']);
-    buttons.push(['ingest-cancel', 'Cancel', 'danger']);
+    hint = escapeHtml(running ? S.uploadingHintRunning : S.uploadingHintIdle);
+    if (running) buttons.push(['ingest-pause', S.btnPause, '']);
+    buttons.push(['ingest-cancel', S.btnCancel, 'danger']);
   } else if (st === 'finalize_unknown') {
-    cls = 'error';
-    status = 'The upload finished but the confirmation was lost.';
-    hint = 'Retry asks the server for the state before sending anything again.';
-    buttons.push(['ingest-retry', 'Retry', 'primary']);
+    cls = 'error'; status = S.finalizeUnknown; hint = escapeHtml(S.finalizeUnknownHint);
+    buttons.push(['ingest-retry', S.btnRetry, 'primary']);
   } else if (st === 'processing') {
     const server = job.server?.status ?? 'queued';
-    status = `Processing on IronMemo: ${server}…`;
-    hint = running ? `Checked ${job.pollCount ?? 0} time(s). You can close this tab; the result is fetched when you come back.` : 'Not being checked in this tab.';
-    if (!running) buttons.push(['ingest-resume', 'Check status', '']);
+    const since = waitingSince(job);
+    if (since) {
+      // Measured 2026-09-13: `queued` for 3 hours with no error on any route (RESULT I4a §4.3/§4.4).
+      cls = 'warn';
+      status = S.waitingLong(formatClock(since));
+      hint = `${escapeHtml(S.waitingLongHint(Math.round((Date.now() - since) / 60000), server))} ${escapeHtml(S.waitingLongKeep)}`;
+      buttons.push(['check-now', S.btnCheckNow, '']);
+    } else {
+      status = S.processing(server);
+      hint = escapeHtml(running ? S.processingHint(job.pollCount ?? 0) : S.processingHintIdle);
+      if (!running) buttons.push(['ingest-resume', S.btnCheckStatus, '']);
+    }
   } else if (st === 'completed') {
     cls = 'ok';
     const dur = job.server?.duration_seconds;
-    status = `✓ Transcribed on IronMemo${Number.isFinite(dur) ? ` — ${formatDuration(dur)}` : ''}`;
+    status = S.completed(Number.isFinite(dur) ? formatDuration(dur) : null);
     const cap = job.server?.free_cap;
-    if (cap?.applied) {
-      hint = `Free cap applied: the first ${formatDuration(cap.cap_seconds ?? 0)} of ${formatDuration(cap.original_duration_seconds ?? 0)} were transcribed. The whole file is kept on the server; unlocking the rest needs an IronMemo account with credits.`;
-    } else {
-      hint = 'The transcript view and download come in the next version (I4b).';
+    if (cap?.applied) banners.push(['warn', capBannerHtml(cap, job)]);
+    if (job.server?.mic_skipped_insufficient_credits) banners.push(['warn', escapeHtml(S.summarySkipped)]);
+    if (job.serverDeleted) banners.push(['muted', escapeHtml(S.serverDeleted)]);
+    else if (job.authLost) banners.push(['error', escapeHtml(S.completedAuthLost)]);
+    const t = job.transcript;
+    if (!t || t.state === 'pending') hint = escapeHtml(S.transcriptFetching);
+    else if (t.state === 'error') {
+      hint = escapeHtml(S.transcriptError(reasonText(t.lastError)));
+      if (!job.serverDeleted && !job.authLost) buttons.push(['fetch-transcript', S.btnFetchTranscript, 'primary']);
+    } else panel = true;
+    if (job.meetingPage && !job.serverDeleted) {
+      hint += ` <a href="${escapeHtml(job.meetingPage)}" target="_blank" rel="noopener">${escapeHtml(S.openOnIronMemo)}</a> ${escapeHtml(S.openCaveat)}`;
     }
-    if (job.meetingPage) {
-      hint += ` <a href="${escapeHtml(job.meetingPage)}" target="_blank" rel="noopener">Open on IronMemo</a> (the website asks you to sign in — attach your e-mail to this guest account first, coming in I4b).`;
-    }
+    if (job.recordingId && !job.serverDeleted && !job.authLost && !running) buttons.push(['delete-server', S.btnDeleteServer, 'danger']);
+    if (job.serverDeleted) buttons.push(['transcribe', S.btnTranscribeAgain, '']);
   } else if (st === 'error') {
     cls = 'error';
-    status = `Failed: ${humanReason(job)}`;
-    hint = job.stateReason === 'auth_lost'
-      ? 'The saved guest session is no longer valid. Retry starts a NEW guest session; earlier uploads stay under the old one.'
-      : (job.lastError?.message ? escapeHtml(job.lastError.message) : '');
-    if (!['too_large', 'unsupported', 'no_mix', 'multi_segment', 'no_file', 'recovered_invalid', 'payment', 'insufficient_credits'].includes(job.stateReason)) {
-      buttons.push(['ingest-retry', 'Retry', 'primary']);
+    const r = job.stateReason;
+    if (r === 'insufficient_credits' || r === 'payment') {
+      status = S.needsCredits; hint = escapeHtml(S.needsCreditsHint);
+      if (job.meetingPage) buttons.push(['open-link', S.btnOpenIronMemo, 'primary', job.meetingPage]);
+    } else if (r === 'transport') {
+      status = S.networkError; hint = escapeHtml(S.networkErrorHint);
+      buttons.push(['ingest-retry', S.btnRetry, 'primary']);
+    } else if (r === 'too_large' || r === 'too_long') {
+      status = S.tooLarge; hint = escapeHtml(job.lastError?.message ?? '');
+    } else if (r === 'auth_lost') {
+      status = S.lostSession; hint = escapeHtml(S.lostSessionHint);
+      buttons.push(['ingest-retry', S.btnReconnect, 'primary']);
+    } else {
+      status = S.failed(reasonText(r));
+      hint = job.lastError?.message ? escapeHtml(job.lastError.message) : '';
+      if (!NO_RETRY.includes(r)) buttons.push(['ingest-retry', S.btnRetry, 'primary']);
     }
-    buttons.push(['ingest-cancel', 'Dismiss', 'danger']);
+    buttons.push(['ingest-cancel', S.btnDismiss, 'danger']);
   } else if (st === 'paused') {
     cls = 'muted';
-    status = {
-      permission_revoked: 'Paused: access to app.ironmemo.com was revoked. Nothing more is sent until you allow it again.',
-      permission_missing: 'Paused: the extension has no access to app.ironmemo.com yet.',
-      consent_missing: 'Paused: cloud processing has not been accepted.',
-      user: 'Paused by you.',
-    }[job.stateReason] ?? `Paused (${job.stateReason ?? 'unknown'}).`;
-    hint = 'Local files are untouched. Resume continues from the last confirmed part.';
-    buttons.push(['ingest-resume', 'Resume', 'primary'], ['ingest-cancel', 'Cancel', 'danger']);
+    status = S.paused[job.stateReason] ?? S.pausedOther(job.stateReason);
+    hint = escapeHtml(S.pausedHint);
+    buttons.push(['ingest-resume', S.btnResume, 'primary'], ['ingest-cancel', S.btnCancel, 'danger']);
   } else {
     status = `State: ${st}`;
   }
 
-  const btnHtml = buttons.map(([action, label, k]) =>
-    `<button class="btn ${k}" data-action="${action}">${escapeHtml(label)}</button>`).join('');
+  const btnHtml = buttons.map(([action, label, k, href]) => (href
+    ? `<a class="btn ${k}" data-action="${action}" href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>`
+    : `<button class="btn ${k}" data-action="${action}">${escapeHtml(label)}</button>`)).join('');
   box.innerHTML = `
     <div class="ingest-row">
-      <div class="ingest-status ${cls}">${status}</div>
+      <div class="ingest-status ${cls}">${escapeHtml(status)}</div>
       <div class="ingest-actions">${btnHtml}</div>
     </div>
     ${progress != null ? `<div class="progress"><i style="width:${Math.round(progress * 100)}%"></i></div>` : ''}
+    ${banners.map(([k, html]) => `<div class="banner ${k}">${html}</div>`).join('')}
     ${hint ? `<div class="ingest-hint">${hint}</div>` : ''}
+    ${panel ? transcriptPanelHtml(job) : ''}
   `;
+  if (panel) fillTranscriptPanel(box, s.sid, job).catch((e) => console.warn('[session-list] transcript panel', e));
 }
 
-function humanReason(job) {
-  const r = job.stateReason;
-  const map = {
-    auth_lost: 'the IronMemo session is no longer valid',
-    payment: 'IronMemo needs credits for this recording',
-    insufficient_credits: 'not enough credits on the IronMemo account',
-    too_large: 'the file is too large for the server',
-    unsupported: 'the server does not accept this file type',
-    no_mix: 'no mix file to send',
-    multi_segment: 'segmented recording cannot be sent as one file',
-    no_file: 'no audio file in this recording',
-    unverified: 'the interrupted recording has not been verified',
-    recovered_invalid: 'the recovered file does not decode',
-    asset_changed: 'the local file changed',
-    transport: 'no answer from the server',
-    server: 'server error',
-    storage_forbidden: 'the storage refused the upload link',
-    origin: 'storage origin not allowed',
-    rate_limited: 'too many requests — try later',
-    server_error: 'IronMemo could not process the recording',
-    server_deleted: 'the recording was deleted on IronMemo',
-  };
-  return map[r] ?? (r ? String(r).replace(/_/g, ' ') : 'unknown error');
+/**
+ * The cap banner says only what the DTO says (free_cap.cap_seconds of original_duration_seconds;
+ * `original_duration_seconds` is null when the server could not probe the file — measured on
+ * recording 75dd6ef0, 2026-09-13). The whole file was uploaded and is kept; nothing beyond the cap
+ * was transcribed (trimming happens before STT). `reason: insufficient_credits` = the wallet bound,
+ * not the plan (recordings_ext/free_cap.py _store).
+ */
+function capBannerHtml(cap, job) {
+  const capStr = formatDuration(cap.cap_seconds ?? 0);
+  const orig = Number.isFinite(cap.original_duration_seconds) ? formatDuration(cap.original_duration_seconds) : null;
+  const credits = cap.reason === 'insufficient_credits';
+  let text;
+  if (credits && orig) text = S.capBannerCredits(capStr, orig);
+  else if (orig) text = S.capBanner(capStr, orig);
+  else text = S.capBannerUnknownLength(capStr);
+  const link = job.meetingPage && !job.serverDeleted
+    ? ` <a href="${escapeHtml(job.meetingPage)}" target="_blank" rel="noopener">${escapeHtml(credits ? S.capTopUp : S.capUnlock)}</a>`
+    : '';
+  return escapeHtml(text) + link;
+}
+
+function transcriptPanelHtml(job) {
+  const t = job.transcript;
+  const ex = t.exports ?? {};
+  const srt = ex.srt;
+  let srtBtn = '';
+  if (srt?.state === 'stored') srtBtn = `<button class="btn" data-action="download-local" data-file="${escapeHtml(srt.file)}" data-ext="srt">${escapeHtml(S.btnDownloadSrt)}</button>`;
+  else if (srt?.state === 'running') srtBtn = `<button class="btn" disabled>${escapeHtml(S.exportRunning)}</button>`;
+  else if (!job.serverDeleted && !job.authLost) srtBtn = `<button class="btn" data-action="export" data-format="srt">${escapeHtml(S.btnExportSrt)}</button>`;
+  const meta = S.transcriptMeta(t.segments, t.words, t.language?.detected ?? t.language?.routed ?? job.server?.language ?? null);
+  const summary = typeof job.server?.summary === 'string' && job.server.summary.trim();
+  return `
+    <div class="transcript" data-expanded="${expandedSids.has(job.sessionId) ? '1' : '0'}">
+      <div class="transcript-head">
+        <span class="ingest-hint">${escapeHtml(meta)}</span>
+        <span class="tbtns">
+          <button class="btn" data-action="download-local" data-file="${FILES.txt}" data-ext="txt">${escapeHtml(S.btnDownloadTxt)}</button>
+          <button class="btn" data-action="download-local" data-file="${FILES.json}" data-ext="json">${escapeHtml(S.btnDownloadJson)}</button>
+          ${t.files?.summary ? `<button class="btn" data-action="download-local" data-file="${FILES.summary}" data-ext="md">${escapeHtml(S.btnDownloadSummary)}</button>` : ''}
+          ${srtBtn}
+        </span>
+      </div>
+      ${srt?.state === 'error' ? `<div class="banner error">${escapeHtml(S.exportFailed(reasonText(srt.lastError)))}</div>` : ''}
+      <pre class="transcript-text" data-role="text">${escapeHtml(S.loading)}</pre>
+      <div class="transcript-foot"><button class="btn ghost" data-action="toggle-transcript" data-role="toggle" hidden>${escapeHtml(S.btnShowAll(0))}</button></div>
+      ${summary ? `<details><summary>${escapeHtml(S.summaryTitle)}${t.summaryStale ? ` — ${escapeHtml(S.summaryStale)}` : ''}</summary><pre class="transcript-text" data-role="summary"></pre></details>` : ''}
+    </div>`;
+}
+
+/** Text goes in through textContent only — never transcript HTML (CODEX Q4). */
+async function fillTranscriptPanel(box, sid, job) {
+  const pre = box.querySelector('[data-role="text"]');
+  const toggle = box.querySelector('[data-role="toggle"]');
+  const sumEl = box.querySelector('[data-role="summary"]');
+  if (sumEl && typeof job.server?.summary === 'string') sumEl.textContent = job.server.summary;
+  if (!pre) return;
+  const sha = job.transcript?.sha256 ?? '';
+  let cached = transcriptTextCache.get(sid);
+  if (!cached || cached.sha !== sha) {
+    const text = await readSessionFileText(sid, FILES.txt);
+    if (text == null) { pre.textContent = S.transcriptFileMissing; if (toggle) toggle.hidden = true; return; }
+    const all = text.replace(/\n$/, '').split('\n');
+    cached = { sha, body: all.slice(job.transcript?.headerLines ?? 6) };
+    transcriptTextCache.set(sid, cached);
+  }
+  const expanded = expandedSids.has(sid);
+  pre.textContent = (expanded ? cached.body : cached.body.slice(0, PREVIEW_LINES)).join('\n');
+  if (toggle) {
+    toggle.hidden = cached.body.length <= PREVIEW_LINES;
+    toggle.textContent = expanded ? S.btnShowLess : S.btnShowAll(cached.body.length);
+  }
+}
+
+function formatClock(ms) {
+  return new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 }
 
 // ── consent dialog ──
@@ -537,10 +612,53 @@ async function handleAction(e, session, sessionEl) {
   if (action === 'ingest-cancel') {
     if (!ingest) return;
     const job = ingest.getJob(session.sid);
-    if (job && !['error', 'create_unknown', 'finalize_unknown'].includes(job.state) && !confirm('Cancel the upload to IronMemo? Local files stay.')) return;
+    if (job && !['error', 'create_unknown', 'finalize_unknown'].includes(job.state) && !confirm(S.confirmCancel)) return;
     await ingest.cancel(session.sid);
     rerender(session.sid);
     return;
+  }
+
+  // ── I4b ──
+  if (action === 'check-now') {
+    if (ingest) { try { await ingest.checkNow(session.sid); } catch (err) { showStatus(err?.message ?? String(err), 'error'); } }
+    rerender(session.sid); return;
+  }
+  if (action === 'fetch-transcript') {
+    if (ingest) { try { await ingest.syncCompleted(session.sid); } catch (err) { showStatus(err?.message ?? String(err), 'error'); } }
+    rerender(session.sid); return;
+  }
+  if (action === 'toggle-transcript') {
+    if (expandedSids.has(session.sid)) expandedSids.delete(session.sid); else expandedSids.add(session.sid);
+    const box = sessionEl.querySelector('.ingest'); const job = ingest?.getJob(session.sid);
+    if (box && job) fillTranscriptPanel(box, session.sid, job).catch(() => {});
+    return;
+  }
+  if (action === 'download-local') {
+    const original = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Downloading…';
+    try {
+      await downloadLocal(session.sid, btn.dataset.file, btn.dataset.ext, session.startedAt);
+      btn.textContent = 'Done';
+      setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1200);
+    } catch (err) {
+      showStatus(S.downloadFailed(err?.message ?? err), 'error');
+      btn.disabled = false; btn.textContent = original;
+    }
+    return;
+  }
+  if (action === 'export') {
+    if (!ingest) return;
+    btn.disabled = true;
+    try { await ingest.exportTranscript(session.sid, btn.dataset.format); }
+    catch (err) { showStatus(S.exportFailed(err?.message ?? String(err)), 'error'); }
+    rerender(session.sid); return;
+  }
+  if (action === 'delete-server') {
+    if (!ingest || !confirm(S.confirmDeleteServer)) return;
+    btn.disabled = true;
+    try { await ingest.deleteOnServer(session.sid); showStatus(S.serverDeleteDone, 'ok'); setTimeout(() => $('status').hidden = true, 2500); }
+    catch (err) { showStatus(S.serverDeleteFailed(err?.message ?? String(err)), 'error'); }
+    rerender(session.sid); return;
   }
 
   if (action === 'download-file') {
@@ -583,8 +701,8 @@ async function handleAction(e, session, sessionEl) {
     const job = ingest?.getJob(session.sid);
     const active = job && (ingest.isRunning(session.sid) || ['session', 'creating', 'uploading', 'finalizing', 'finalize_unknown', 'processing', 'paused', 'create_unknown'].includes(job.state));
     const question = active
-      ? 'An upload to IronMemo is in progress for this recording. Deleting stops it and cannot be undone. Continue?'
-      : `Delete session from ${sessionEl.querySelector('.session-date').textContent.replace(/Completed|Interrupted without stop/, '').trim()}? Files cannot be recovered.`;
+      ? S.confirmDeleteLocalActive
+      : S.confirmDeleteLocal(sessionEl.querySelector('.session-date').textContent.replace(/Completed|Interrupted without stop/, '').trim());
     if (!confirm(question)) return;
     btn.disabled = true; btn.textContent = 'Deleting…';
     try {
@@ -659,6 +777,33 @@ async function deleteSession(sid) {
   const root = await navigator.storage.getDirectory();
   const sessionsDir = await root.getDirectoryHandle('sessions');
   await sessionsDir.removeEntry(sid, { recursive: true });
+}
+
+// ── I4b: local transcript files ──
+
+async function sessionDirHandle(sid) {
+  const root = await navigator.storage.getDirectory();
+  return (await root.getDirectoryHandle('sessions')).getDirectoryHandle(sid);
+}
+
+async function readSessionFileText(sid, name) {
+  try { return await (await (await sessionDirHandle(sid)).getFileHandle(name)).getFile().then((f) => f.text()); }
+  catch (e) { if (e?.name === 'NotFoundError') return null; throw e; }
+}
+
+/** transcript.v2.json → IronMemo-<date>-transcript.json, transcript.txt → …-transcript.txt, summary.md → …-summary.md, export.srt → …-transcript.srt */
+async function downloadLocal(sid, name, ext, startedAt) {
+  const file = await (await (await sessionDirHandle(sid)).getFileHandle(name)).getFile();
+  const dateStr = startedAt ? new Date(startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-') : 'unknown';
+  const base = name === FILES.summary ? 'summary' : 'transcript';
+  const filename = `IronMemo-${dateStr}-${base}.${ext}`;
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 // ─────────────────────────────────────────────────────────── format helpers ──

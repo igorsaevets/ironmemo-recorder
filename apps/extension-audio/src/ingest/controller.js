@@ -23,6 +23,7 @@ import { createApi, PATHS, ApiError, TransportError, AuthLostError } from './api
 import { createAuth, hardenStorage } from './auth.js';
 import * as ledger from './ledger.js';
 import { pickAsset, openAsset, performUpload, withRetry, sleep, summarizeRecording, AssetError, ROLE_SLUG } from './upload.js';
+import { fetchAndStoreTranscript, requestExport } from './transcript.js';
 
 export const CONSENT_KEY = 'ironmemo.ingestConsent.v1';
 export const CONSENT_VERSION = 1;
@@ -30,6 +31,17 @@ export const CONSENT_TEXT_ID = 'cloud-en-v1';
 export const DEFAULT_API_BASE = 'https://app.ironmemo.com';
 const TERMINAL = new Set(['completed', 'error', 'deleted']);
 const RESUMABLE = new Set(['session', 'creating', 'create_unknown', 'uploading', 'finalizing', 'finalize_unknown', 'processing']);
+/** A `queued` older than this is its own UI state: measured 2026-09-13, a 3-hour silent stall with no error on any route. */
+export const WAIT_LONG_MS = 10 * 60 * 1000;
+/** How often a stored transcript is checked against the server's updated_at (a paid unlock reprocesses the recording). */
+export const REVISION_CHECK_MS = 60 * 60 * 1000;
+
+/** When a processing job has been waiting longer than WAIT_LONG_MS: the timestamp it has been waiting since, else null. */
+export function waitingSince(job) {
+  if (job?.state !== 'processing') return null;
+  const since = job.timings?.processingSince ?? job.completeIntentAt ?? job.timings?.firstStatusAt ?? null;
+  return since && Date.now() - since > WAIT_LONG_MS ? since : null;
+}
 
 export { sourceTypeFromUrl } from './source-type.js';
 
@@ -163,6 +175,7 @@ export class IngestController {
       completeIntentAt: null, server: null, pollCount: 0, meetingPage: null,
       timings: { startedAt: Date.now() }, consentVersion: this.consent?.version ?? null, consentTextId: this.consent?.textId ?? null,
       createdAt: Date.now(), updatedAt: Date.now(), localDeleted: false,
+      transcript: null, serverDeleted: null, authLost: null, // I4b
     };
   }
 
@@ -182,6 +195,15 @@ export class IngestController {
       const lease = await ledger.acquireLease(job.sessionId, this.owner);
       if (!lease.ok) { blocked = true; this.log('resume_lease_busy', { sid: job.sessionId, ageMs: Date.now() - (lease.at ?? 0) }); continue; }
       out.push(this.run(job.sessionId));
+    }
+    // I4b: completed jobs — fetch a transcript that is not stored yet (jobs finished by an
+    // earlier version, or a failed fetch), and re-check the server revision once an hour.
+    for (const job of [...this.jobs.values()]) {
+      if (job.state !== 'completed' || job.localDeleted || job.serverDeleted || this.running.has(job.sessionId)) continue;
+      const t = job.transcript;
+      const needFetch = !t || t.state !== 'stored';
+      const needCheck = t?.state === 'stored' && Date.now() - (t.checkedAt ?? 0) > REVISION_CHECK_MS;
+      if (needFetch || needCheck) out.push(this.syncCompleted(job.sessionId));
     }
     if (blocked && !this.resumeTimer) {
       this.resumeTimer = setTimeout(() => { this.resumeTimer = null; this.resumeAll().catch(() => {}); }, ledger.LEASE_TTL_MS + 1000);
@@ -397,14 +419,164 @@ export class IngestController {
       if (TERMINAL.has(rec.status)) {
         job.timings.completedAt = Date.now();
         job.meetingPage = `${this.origin}${PATHS.meetingPage(job.recordingId)}`;
-        if (rec.status === 'completed') { job.state = 'completed'; job.stateReason = null; }
-        else { job.state = 'error'; job.stateReason = rec.failed_insufficient_credits ? 'insufficient_credits' : `server_${rec.status}`; }
+        if (rec.status === 'completed') {
+          job.state = 'completed'; job.stateReason = null;
+          await save(job);
+          await this.fetchTranscript(job, signal, save); // I4b: the transcript comes back right here
+          return;
+        }
+        job.state = 'error'; job.stateReason = rec.failed_insufficient_credits ? 'insufficient_credits' : `server_${rec.status}`;
         await save(job);
         return;
       }
       await save(job);
       await sleep(wait, signal);
       wait = Math.min(30_000, Math.round(wait * 1.5));
+    }
+  }
+
+  // ── I4b: the transcript comes back ───────────────────────────────────────────────────
+  /** Fetch + store the transcript of a completed job; failures land in job.transcript, never in job.state. */
+  async fetchTranscript(job, signal, save) {
+    const sid = job.sessionId;
+    job.transcript = { ...(job.transcript ?? {}), state: 'pending', lastError: null };
+    await save(job);
+    try {
+      if (job.localDeleted) { const e = new Error('the local files were deleted'); e.kind = 'local_deleted'; throw e; }
+      const dir = await this.sessionDir(sid);
+      job.transcript = await fetchAndStoreTranscript({ api: this.api, dir, job, log: this.log, signal, origin: this.origin });
+      job.authLost = null;
+      await save(job);
+    } catch (e) {
+      if (e?.name === 'AbortError') throw e;
+      const info = errInfo(e);
+      job.transcript = { ...(job.transcript ?? {}), state: 'error', lastError: info, checkedAt: Date.now() };
+      if (e instanceof AuthLostError) job.authLost = { at: Date.now() };
+      await save(job);
+      this.log('transcript_failed', { sid, kind: info.kind, status: info.status, code: info.code, message: info.message });
+    }
+  }
+
+  /**
+   * A completed job on page open: read the recording, fetch the transcript when it is not stored,
+   * replace the local snapshot when the server's updated_at moved (a paid unlock reprocesses the
+   * recording; transcript-v2 may serve the OLD object while that runs, so the status is read first
+   * and a non-terminal status goes back to polling), remember a server-side delete.
+   */
+  async syncCompleted(sid) {
+    const job = this.jobs.get(sid);
+    if (!job || job.state !== 'completed' || this.running.has(sid)) return job ?? null;
+    const lease = await ledger.acquireLease(sid, this.owner);
+    if (!lease.ok) return job;
+    const abort = new AbortController();
+    const signal = abort.signal;
+    this.running.set(sid, { abort });
+    const save = async (j) => { this.jobs.set(sid, j); await ledger.putJob(j); this.emit(sid); };
+    try {
+      let rec;
+      try {
+        rec = await withRetry(() => this.api.get(PATHS.recording(job.recordingId), { signal }), { signal, log: this.log, what: 'status_completed', attempts: 3 });
+      } catch (e) {
+        if (e?.name === 'AbortError') throw e;
+        if (e instanceof ApiError && e.status === 404) {
+          job.serverDeleted = job.serverDeleted ?? { at: Date.now(), reason: 'not_found' };
+          job.transcript = { ...(job.transcript ?? {}), checkedAt: Date.now() };
+          await save(job); this.log('server_copy_gone', { sid }); return job;
+        }
+        if (e instanceof AuthLostError) {
+          job.authLost = { at: Date.now() };
+          job.transcript = { ...(job.transcript ?? {}), state: job.transcript?.state === 'stored' ? 'stored' : 'error', lastError: errInfo(e), checkedAt: Date.now() };
+          await save(job); return job;
+        }
+        throw e;
+      }
+      job.server = summarizeRecording(rec);
+      job.authLost = null; // the session answered — an earlier auth loss no longer holds
+      if (rec.status !== 'completed') {
+        if (rec.status === 'deleted') job.serverDeleted = job.serverDeleted ?? { at: Date.now(), reason: 'server_deleted' };
+        else if (!TERMINAL.has(rec.status)) {
+          // Reprocessing: keep the local snapshot, poll again; the new run replaces it on completed.
+          this.log('reprocess_detected', { sid, status: rec.status });
+          job.state = 'processing'; job.stateReason = null; job.timings.processingSince = Date.now();
+          await save(job);
+          this.running.delete(sid); await ledger.releaseLease(sid, this.owner).catch(() => {});
+          return this.run(sid);
+        }
+        job.transcript = { ...(job.transcript ?? {}), checkedAt: Date.now() };
+        await save(job); return job;
+      }
+      const t = job.transcript;
+      const changed = t?.state === 'stored' && !!t.recordingUpdatedAt && !!rec.updated_at && t.recordingUpdatedAt !== rec.updated_at;
+      if (!t || t.state !== 'stored' || changed) {
+        if (changed) this.log('transcript_revision_changed', { sid, from: t.recordingUpdatedAt, to: rec.updated_at });
+        await this.fetchTranscript(job, signal, save);
+      } else {
+        job.transcript = { ...t, checkedAt: Date.now() };
+        await save(job);
+      }
+      return job;
+    } catch (e) {
+      if (e?.name !== 'AbortError') {
+        this.log('sync_completed_failed', { sid, kind: e.kind ?? e.name, status: e.status ?? null, message: String(e.message ?? e).slice(0, 200) });
+        job.transcript = { ...(job.transcript ?? {}), state: job.transcript?.state === 'stored' ? 'stored' : 'error', lastError: errInfo(e), checkedAt: Date.now() };
+        await save(job);
+      }
+      return job;
+    } finally {
+      this.running.delete(sid);
+      await ledger.releaseLease(sid, this.owner).catch(() => {});
+      this.emit(sid);
+    }
+  }
+
+  /** «Waiting for the server» → an immediate status read (pause + resume restarts the poll at 5 s). */
+  async checkNow(sid) {
+    const job = this.jobs.get(sid);
+    if (!job || job.state !== 'processing') return job ?? null;
+    if (this.running.has(sid)) await this.pause(sid, 'check_now');
+    return this.resume(sid);
+  }
+
+  /** DELETE the server copy (soft-delete + erasure on the server); the local files stay. */
+  async deleteOnServer(sid) {
+    const job = this.jobs.get(sid);
+    if (!job?.recordingId) throw new Error('This recording has no copy on IronMemo.');
+    if (this.running.has(sid) || RESUMABLE.has(job.state)) throw new Error('Finish or cancel the upload first.');
+    try { await this.api.del(PATHS.recording(job.recordingId)); }
+    catch (e) { if (!(e instanceof ApiError && e.status === 404)) throw e; }
+    job.serverDeleted = { at: Date.now(), reason: 'user' }; job.meetingPage = null;
+    await ledger.putJob(job); this.jobs.set(sid, job); this.emit(sid);
+    this.log('server_deleted', { sid, recordingId: job.recordingId });
+    return job;
+  }
+
+  /** Ask the server for an export (srt/vtt/txt/json), download it, store export.<fmt> next to the audio. */
+  async exportTranscript(sid, format) {
+    const job = this.jobs.get(sid);
+    if (!job?.recordingId || job.state !== 'completed') throw new Error('The transcript is not ready yet.');
+    if (job.serverDeleted) throw new Error('The server copy was deleted; exports are rendered on the server.');
+    if (this.running.has(sid)) throw new Error('Busy with this recording — try again in a moment.');
+    const abort = new AbortController();
+    this.running.set(sid, { abort });
+    const save = async (j) => { this.jobs.set(sid, j); await ledger.putJob(j); this.emit(sid); };
+    job.transcript = { ...(job.transcript ?? {}), exports: { ...(job.transcript?.exports ?? {}), [format]: { state: 'running', at: Date.now() } } };
+    await save(job);
+    try {
+      const dir = await this.sessionDir(sid);
+      // Speaker prefixes only when the transcript names speakers: with `speakers []` the server renders
+      // «Unknown: …» on every cue (measured on production 2026-09-13, export fd5fd06c).
+      const includeSpeakers = (job.transcript?.speakers ?? 0) > 0;
+      const rec = await requestExport({ api: this.api, dir, job, format, log: this.log, signal: abort.signal, isOriginAllowed: (o) => this.isOriginAllowed(o), includeSpeakers });
+      job.transcript.exports[format] = rec;
+      await save(job);
+      return rec;
+    } catch (e) {
+      job.transcript.exports[format] = { state: 'error', lastError: errInfo(e), at: Date.now() };
+      await save(job);
+      throw e;
+    } finally {
+      this.running.delete(sid);
+      this.emit(sid);
     }
   }
 

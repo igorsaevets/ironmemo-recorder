@@ -183,6 +183,12 @@ export function summarizeRecording(rec) {
     provider_used: typeof rec.provider_used === 'string' ? rec.provider_used.slice(0, 40) : null,
     free_cap: rec.free_cap ?? null, failed_insufficient_credits: rec.failed_insufficient_credits ?? null,
     mic_skipped_insufficient_credits: rec.mic_skipped_insufficient_credits ?? null,
+    // I4b: the transcript panel shows the language and keeps the markdown summary next to the
+    // transcript files. `credits_charged` is NOT kept — a placeholder 0 in the DTO
+    // (recordings_ext/views.py _recording_to_dto) that must never be shown as a verified charge.
+    language: typeof rec.language === 'string' ? rec.language.slice(0, 16) : null,
+    summary: typeof rec.summary === 'string' ? rec.summary.slice(0, 20_000) : null,
+    summary_stale: rec.summary_stale ?? null,
     // The production DTO carries NO error text (only the two *_insufficient_credits flags); this
     // field stays for a future DTO and is null today.
     error_message: typeof rec.error_message === 'string' ? rec.error_message.slice(0, 300) : null,
@@ -209,7 +215,7 @@ export async function performUpload(ctx) {
   if (job.state === 'finalize_unknown') {
     const rec = await withRetry(() => api.get(PATHS.recording(job.recordingId), { signal }), { signal, log, what: 'status_after_unknown_finalize' });
     if (rec.status !== 'created' && rec.status !== 'uploading') {
-      job.state = 'processing'; job.server = summarizeRecording(rec); await save(job);
+      job.state = 'processing'; job.server = summarizeRecording(rec); job.timings.processingSince = Date.now(); await save(job);
       log('finalize_reconciled', { status: rec.status });
       return rec;
     }
@@ -231,7 +237,7 @@ export async function performUpload(ctx) {
       throw e;
     }
     job.timings.finalizeMs = Math.round(performance.now() - t0);
-    job.state = 'processing'; job.server = summarizeRecording(rec); await save(job);
+    job.state = 'processing'; job.server = summarizeRecording(rec); job.timings.processingSince = Date.now(); await save(job);
     log('finalized', { transport: job.transport, ms: job.timings.finalizeMs, status: rec.status });
     return rec;
   }

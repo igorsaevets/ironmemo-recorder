@@ -90,3 +90,21 @@ footer { display: flex; justify-content: space-between; align-items: center; mar
 .consent-card .check input { margin-top: 3px; accent-color: var(--accent); }
 .consent-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 .consent-card a { color: #a2bcff; }
+
+/* ── I4b: transcript panel, banners ─────────────────────────────────────────────────── */
+.ingest-status.warn { color: #ffd9a0; }
+.banner { font-size: 12.5px; line-height: 1.5; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); }
+.banner.warn { background: rgba(240,162,56,.1); border-color: rgba(240,162,56,.4); color: #ffd9a0; }
+.banner.error { background: rgba(239,95,107,.1); border-color: rgba(239,95,107,.4); color: #ffc7cc; }
+.banner.muted { background: rgba(151,160,176,.08); color: var(--muted); }
+.banner a { color: #a2bcff; }
+.transcript { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; background: var(--bg); }
+.transcript-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tbtns { white-space: nowrap; }
+.transcript-text { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.55 ui-monospace, "SF Mono", Consolas, monospace;
+                   color: var(--text); max-height: 60vh; overflow: auto; }
+.transcript-foot { text-align: right; }
+.transcript details { font-size: 12.5px; }
+.transcript details > summary { cursor: pointer; color: var(--muted); }
+.transcript details[open] > summary { margin-bottom: 6px; }
+a.btn { text-decoration: none; display: inline-block; }

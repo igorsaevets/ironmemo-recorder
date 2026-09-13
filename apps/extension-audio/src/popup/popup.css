@@ -44,6 +44,9 @@ body { width: 320px; margin: 0; padding: 14px; background: var(--bg); color: var
  * v0.3.2 shipped without this and the overlay stayed on screen after «Продолжить». */
 .consent { display: flex; flex-direction: column; gap: 0; max-height: 560px; }
 .consent[hidden] { display: none; }
+/* Same trap for the live-wave canvas: `.wave { display:block }` beat the hidden attribute, so the idle popup
+   showed an empty 60-px box (seen on the I4b screenshot 14-popup-update-notice, 2026-09-13). */
+.wave[hidden] { display: none; }
 .consent-scroll { flex: 1 1 auto; overflow-y: auto; padding-right: 6px;
                   display: flex; flex-direction: column; gap: 10px; }
 .consent-actions { flex: 0 0 auto; display: flex; flex-direction: column; gap: 10px;
@@ -63,3 +66,9 @@ body { width: 320px; margin: 0; padding: 14px; background: var(--bg); color: var
 .consent details.en { font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
 .consent details.en summary { cursor: pointer; padding: 4px 0; color: var(--text); }
 .consent details.en p { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+/* I4b: one-time update notice (existing users), dismissed with "keep recording locally" */
+.notice { margin: 8px 0; padding: 8px 10px; border-radius: 8px; font-size: 12px; line-height: 1.45;
+          background: rgba(79,124,255,.10); border: 1px solid rgba(79,124,255,.35); color: #dfe6ff; }
+.notice[hidden] { display: none; }
+.notice button { margin-top: 6px; }

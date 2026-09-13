@@ -30,6 +30,9 @@ export const PATHS = Object.freeze({
   complete: (id, up) => `/recordings/api/recordings/${id}/multipart/${up}/complete`,
   abort: (id, up) => `/recordings/api/recordings/${id}/multipart/${up}/abort`,
   transcriptV2: (id) => `/recordings/api/recordings/${id}/transcript-v2`,
+  exports: (id) => `/recordings/api/recordings/${id}/exports`,
+  exportDetail: (exportId) => `/recordings/api/exports/${exportId}`,
+  entitlement: '/recordings/api/entitlement',
   meetingPage: (id) => `/app/meetings/${id}`,
 });
 
@@ -40,6 +43,11 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status; this.code = code; this.params = params; this.path = path;
     this.kind = classify(status);
+    // Error keys that mean more than their HTTP status (recordings_ext/errors.py, origin/main
+    // 6720f51, 2026-09-13): the server says "too large" with a 400, not a 413.
+    if (code === 'error.400.file_too_large') this.kind = 'too_large';
+    else if (code === 'error.400.duration_too_long') this.kind = 'too_long';
+    else if (code === 'error.402.insufficient_credits' || code === 'error.402.payment_required') this.kind = 'payment';
   }
 
   static async fromResponse(res, path) {
@@ -102,7 +110,7 @@ export function templ(path) {
 export function createApi({ baseUrl, auth, log = () => {} }) {
   const origin = new URL(baseUrl).origin;
 
-  async function request(method, path, { json, auth: needAuth = true, replay = true, signal } = {}) {
+  async function request(method, path, { json, auth: needAuth = true, replay = true, signal, raw = false } = {}) {
     const headers = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
     let body;
     if (json !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(json); }
@@ -121,7 +129,7 @@ export function createApi({ baseUrl, auth, log = () => {} }) {
     if (res.status === 401 && needAuth && replay) {
       log('api.401_refresh_replay', { method, path: templ(path), ms });
       await auth.refresh({ staleAccess: usedAccess, reason: '401' });
-      return request(method, path, { json, auth: needAuth, replay: false, signal });
+      return request(method, path, { json, auth: needAuth, replay: false, signal, raw });
     }
     if (!res.ok) {
       const err = await ApiError.fromResponse(res, path);
@@ -141,9 +149,12 @@ export function createApi({ baseUrl, auth, log = () => {} }) {
       log('api.body_cut_off', { method, path: templ(path), status: res.status });
       throw new TransportError(`Answer from ${origin} was cut off (${e?.message ?? e})`, { cause: e, path });
     }
-    if (!text) return res.ok && method !== 'GET' ? (() => { throw new TransportError(`Empty ${res.status} answer from ${origin}`, { path }); })() : null;
-    try { return JSON.parse(text); }
+    if (!text) return res.ok && method !== 'GET' ? (() => { throw new TransportError(`Empty ${res.status} answer from ${origin}`, { path }); })() : (raw ? { text: '', json: null } : null);
+    let parsed;
+    try { parsed = JSON.parse(text); }
     catch { throw new TransportError(`Answer from ${origin} was not JSON (${res.status})`, { path }); }
+    // raw: the caller wants the body exactly as received — the transcript is stored VERBATIM (I4b).
+    return raw ? { text, json: parsed } : parsed;
   }
 
   return {

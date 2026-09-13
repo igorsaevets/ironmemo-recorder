@@ -1,5 +1,6 @@
 import { loadSettings } from '../shared/settings-store.js';
 import { getByPath, estimateMBPerHour } from '../shared/settings-schema.js';
+import { POPUP } from '../shared/strings.js';
 
 const $ = (id) => document.getElementById(id);
 let timerHandle = null;
@@ -9,7 +10,13 @@ let timerHandle = null;
 // which is how Purple Nickel wants a change in data practices communicated.
 const CONSENT_KEY = 'ironmemo.consent.v1';
 const CONSENT_VERSION = 4;
-const CONSENT_TEXT_ID = 'ru-en-v4-policy-link';
+// I4b (2026-09-13): the notice gained one neutral sentence about OPTIONAL transcription. The
+// version is NOT bumped (nobody who records locally is asked again — ADR-008 «Уточнения» 5); the
+// text id changes so the stored record says which text was shown. Cloud processing has its own
+// consent (ironmemo.ingestConsent.v1) before the first upload.
+const CONSENT_TEXT_ID = 'en-v4-cloud-note';
+const NOTICE_KEY = 'ironmemo.updateNotice.v1';
+const NOTICE_ID = 'cloud-option-2026-09';
 
 // Живая волна микрофона в popup, чтобы юзер видел «звук приходит» и не получил пустой
 // файл, если mic заблокирован драйвером/системой (Kaspersky, audiosrv hang, mute).
@@ -26,6 +33,26 @@ async function boot() {
   }
   $('app').hidden = false;
   await init();
+  await maybeShowNotice(consent);
+}
+
+/** Existing users (recording notice accepted before the transcription option) see the update notice once. */
+async function maybeShowNotice(consent) {
+  try {
+    const seen = (await chrome.storage.local.get(NOTICE_KEY))[NOTICE_KEY];
+    if (seen?.id === NOTICE_ID) return;
+    if (consent?.textShown === CONSENT_TEXT_ID) { // accepted the notice that already carries the sentence
+      await chrome.storage.local.set({ [NOTICE_KEY]: { id: NOTICE_ID, seenAt: Date.now(), via: 'consent' } });
+      return;
+    }
+    $('noticeText').textContent = POPUP.noticeText;
+    $('noticeOk').textContent = POPUP.noticeOk;
+    $('notice').hidden = false;
+    $('noticeOk').addEventListener('click', async () => {
+      await chrome.storage.local.set({ [NOTICE_KEY]: { id: NOTICE_ID, seenAt: Date.now(), via: 'notice' } });
+      $('notice').hidden = true;
+    }, { once: true });
+  } catch (e) { console.warn('[popup] update notice', e); }
 }
 
 async function getConsent() {
@@ -45,6 +72,7 @@ function showConsent() {
     try {
       await chrome.storage.local.set({
         [CONSENT_KEY]: { version: CONSENT_VERSION, textShown: CONSENT_TEXT_ID, acceptedAt: Date.now() },
+        [NOTICE_KEY]: { id: NOTICE_ID, seenAt: Date.now(), via: 'consent' },
       });
       $('consent').hidden = true;
       $('app').hidden = false;
