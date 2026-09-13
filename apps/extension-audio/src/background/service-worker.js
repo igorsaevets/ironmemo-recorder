@@ -32,6 +32,7 @@
  */
 
 import { getByPath } from '../shared/settings-schema.js';
+import { sourceTypeFromUrl } from '../ingest/source-type.js';
 
 // Момент старта ЭТОГО экземпляра service worker'а. performance.now() при
 // получении START = сколько worker уже живёт: малое значение = холодный старт.
@@ -178,6 +179,10 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
 
     // ── 3. Захват звука вкладки (если нужен) — под user gesture ──
     let streamId = null;
+    // I4a: source_type for the IronMemo API is derived from the captured tab's host HERE (the
+    // only place the URL is known) and only the ENUM is persisted — the host itself is not
+    // (ADR-008 «Уточнения» 7: storing it would be extra data to disclose). Mic-only = dictaphone.
+    let sourceType = 'dictaphone';
     if (needsTab) {
       const tab = tabId
         ? await chrome.tabs.get(tabId)
@@ -186,6 +191,7 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
       if (/^(chrome|edge|about|chrome-extension):/i.test(tab.url ?? '')) {
         throw new Error('Звук служебных страниц браузера захватить нельзя. Откройте обычный сайт.');
       }
+      sourceType = sourceTypeFromUrl(tab.url ?? '');
       streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
       mark('streamIdObtained');
     }
@@ -193,7 +199,7 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
     // ── 4. START в offscreen — сразу, пока streamId ещё жив ──
     const sessionId = crypto.randomUUID();
     const res = await chrome.runtime.sendMessage({
-      target: 'offscreen', type: 'START', sessionId, streamId, settings, startTimings: T,
+      target: 'offscreen', type: 'START', sessionId, streamId, settings, startTimings: T, sourceType,
     });
     mark('offscreenStarted');
     if (!res?.ok) throw new Error(res?.error ?? 'Offscreen-документ не подтвердил старт.');

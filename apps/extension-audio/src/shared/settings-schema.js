@@ -660,54 +660,69 @@ export const SETTINGS = [
   },
 
   // ────────────────────────────────────────────────────── ОТПРАВКА ──
+  // I4a (2026-09-13): the group is wired to the live API (ADR-008). Every option is kept;
+  // defaults changed where the measured contract decided them (TECH-IDEAS.md §1, spike-01).
   {
     key: 'upload.enabled', group: 'upload', type: 'bool', stage: 'mvp',
-    label: 'Разрешить отправку в IronMemo', default: false,
-    why: 'Диктофон обязан приносить пользу БЕЗ регистрации. Отправка — добровольный шаг.',
+    label: 'Show "Transcribe with IronMemo" on the Recordings page', default: true,
+    why: 'The recorder must be useful WITHOUT registration, so the button is only an offer: nothing '
+       + 'leaves the browser until the person accepts the cloud disclosure and clicks Transcribe on ONE '
+       + 'recording. Off hides the button entirely (a kill switch for people who never want cloud).',
     decides: 'ADR-008', readback: null,
   },
   {
     key: 'upload.apiBase', group: 'upload', type: 'string', stage: 'experiment',
-    label: 'Базовый URL API', default: '',
-    why: 'Пусто намеренно. Реальный путь берётся из аудита кода backend, а не из документа-предложения.',
+    label: 'API base URL', default: 'https://app.ironmemo.com',
+    why: 'Measured live 2026-09-13: auth /auth/api/v1/…, workspaces /workspaces/api/v1/, recordings '
+       + '/recordings/api/recordings (no trailing slash). Only origins listed in manifest '
+       + 'optional_host_permissions can be granted; other values are for a local mock server in tests.',
     requires: { key: 'upload.enabled', equals: true },
-    readback: null,
+    readback: 'ironmemo.ingest.v1:<session>.apiOrigin',
   },
   {
     key: 'upload.authMode', group: 'upload', type: 'enum', stage: 'experiment',
-    label: 'Способ авторизации', default: 'oauth_pkce',
+    label: 'Authentication', default: 'guest',
     options: [
-      { value: 'oauth_pkce', label: 'OAuth Authorization Code + PKCE S256' },
+      { value: 'guest', label: 'Guest session (POST /auth/api/v1/anonymous/), claim by e-mail later',
+        hint: 'official backend feature since 2026-09-12: 10 free minutes per recording, starter credits' },
+      { value: 'oauth_pkce', label: 'OAuth Authorization Code + PKCE S256',
+        hint: 'not available: the callback redirects only to a same-origin URI (measured 2026-09-13)' },
       { value: 'personal_token', label: 'Личный токен',
         risk: 'Долгоживущий токен в chrome.storage. Расширение — публичный клиент без защищённого хранилища.' },
       { value: 'none', label: 'Без авторизации (только локальный стенд)' },
     ],
-    why: 'Для публичных клиентов актуальный OAuth Security BCP требует PKCE.',
+    why: 'Guest first: the extension never asks for a password; the guest key lives in chrome.storage.local '
+       + '(TRUSTED_CONTEXTS) and is the ONLY key to the server copies until the e-mail claim (I4b).',
     requires: { key: 'upload.enabled', equals: true },
-    decides: 'ADR-008', readback: null,
+    decides: 'ADR-008', readback: 'ironmemo.account.v1.kind',
   },
   {
     key: 'upload.strategy', group: 'upload', type: 'enum', stage: 'experiment',
-    label: 'Транспорт загрузки', default: 'multipart',
+    label: 'Транспорт загрузки', default: 'auto',
     options: [
-      { value: 'django_post', label: 'Обычный POST на backend' },
+      { value: 'auto',        label: 'Auto: single PUT below the server part size, multipart above', hint: 'the web app does the same' },
+      { value: 'django_post', label: 'Обычный POST на backend', hint: 'no such route on the live API' },
       { value: 'single_put',  label: 'Presigned PUT в хранилище' },
       { value: 'multipart',   label: 'Multipart в хранилище', hint: 'докачка только неудавшихся частей' },
     ],
     requires: { key: 'upload.enabled', equals: true },
-    decides: 'ADR-008', readback: null,
+    decides: 'ADR-008', readback: 'ironmemo.ingest.v1:<session>.transport',
   },
   {
     key: 'upload.partSizeMB', group: 'upload', type: 'int', stage: 'experiment',
-    label: 'Размер части, МБ', default: 8, min: 5, max: 100, step: 1,
-    why: 'S3-совместимый multipart требует минимум 5 МБ на часть (кроме последней).',
+    label: 'Размер части, МБ', default: 10, min: 5, max: 100, step: 1,
+    why: 'S3-совместимый multipart требует минимум 5 МБ на часть (кроме последней). The live server '
+       + 'DICTATES the part size (upload-limits.multipart_part_size = 10 MB, measured); this value is '
+       + 'informational until the server exposes a choice.',
     requires: { key: 'upload.strategy', equals: 'multipart' },
-    readback: null,
+    readback: 'ironmemo.ingest.v1:<session>.partSizeBytes',
   },
   {
     key: 'upload.concurrency', group: 'upload', type: 'int', stage: 'experiment',
     label: 'Параллельных частей', default: 3, min: 1, max: 8, step: 1,
-    requires: { key: 'upload.strategy', equals: 'multipart' },
+    why: 'Backend docstring recommends 4 concurrent parts; the web app uses 4. 3 keeps head-room for the '
+       + 'recorder that may be running in the same browser. Measured per run in I4a RESULT.md.',
+    requires: { key: 'upload.enabled', equals: true },
     readback: null,
   },
   {

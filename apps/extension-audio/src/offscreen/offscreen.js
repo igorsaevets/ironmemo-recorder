@@ -175,7 +175,7 @@ async function probeWebCodecs({ streamId = null, withMic = true } = {}) {
 
 // ───────────────────────────────────────────────────── старт ──
 
-async function start({ sessionId, streamId, settings, startTimings = null }) {
+async function start({ sessionId, streamId, settings, startTimings = null, sourceType = null }) {
   if (state.sessionId) throw new Error('Запись уже идёт.');
   state.sessionId = sessionId;
   state.settings = settings;
@@ -192,7 +192,10 @@ async function start({ sessionId, streamId, settings, startTimings = null }) {
   const mode = g('source.mode', 'mic');
   const impl = g('audioEnc.impl', 'mediarecorder');
   state.engine = await pickEngine(impl);
-  const applied = { requestedAt: state.timeline.t0Iso, sources: {}, engine: state.engine };
+  // I4a: `sourceType` is the IronMemo source_type ENUM (meet|zoom|teams|dictaphone|other)
+  // computed by the service worker from the captured tab; the host is deliberately not stored.
+  const applied = { requestedAt: state.timeline.t0Iso, sources: {}, engine: state.engine,
+                    sourceType: sourceType ?? (streamId ? 'other' : 'dictaphone') };
 
   // ── микрофон ──
   let micStream = null;

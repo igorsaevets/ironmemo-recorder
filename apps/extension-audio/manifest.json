@@ -17,6 +17,8 @@
 
   "optional_permissions": [],
 
+  "optional_host_permissions": ["https://app.ironmemo.com/*"],
+
   "host_permissions": [],
 
   "background": {
