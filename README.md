@@ -2,7 +2,7 @@
 
 Chrome MV3 extension for recording meetings and calls locally: microphone and tab audio, works while the tab is closed, decodes the file after Chrome crashes.
 
-**Status: early development.** Not yet on the Chrome Web Store. Ships as an unpacked extension.
+**Status: v0.4.0 is published on the Chrome Web Store** ([listing](https://chromewebstore.google.com/detail/epnajjfddhbhgabhmcaomfnjhnhjnchd)); v0.5.0 is in review. Also loads as an unpacked extension for development.
 
 ## What it does
 
@@ -34,7 +34,7 @@ cd ironmemo-recorder
 
 ## What it does NOT do (yet)
 
-- No Chrome Web Store submission (privacy policy, screenshots, promo tile, DSA pending).
+- Chrome Web Store: v0.4.0 published (2026-09); promo tiles and localized screenshots still pending.
 - No live waveform in the popup — a silently-empty file is possible if the OS/driver holds the microphone.
 - No user-visible session list — files live in OPFS, invisible in Explorer/Finder.
 - No backend upload — the recorder is 100 % local.
