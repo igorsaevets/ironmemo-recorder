@@ -176,8 +176,15 @@ export function summarizeRecording(rec) {
   return {
     id: rec.id ?? null, status: rec.status ?? null, title: typeof rec.title === 'string' ? rec.title.slice(0, 200) : null,
     duration_seconds: rec.duration_seconds ?? null, file_size_bytes: rec.file_size_bytes ?? null,
+    // Numbers the Recordings page and the bench report (RecordingResponse, 26 fields measured on
+    // production 2026-09-13: 03-research/I4-ingest/I4a/prod-status-20260913-025811.json).
+    segments_count: rec.segments_count ?? null, speakers_count: rec.speakers_count ?? null, word_count: rec.word_count ?? null,
+    confidence_avg: rec.confidence_avg ?? null, processing_latency_ms: rec.processing_latency_ms ?? null,
+    provider_used: typeof rec.provider_used === 'string' ? rec.provider_used.slice(0, 40) : null,
     free_cap: rec.free_cap ?? null, failed_insufficient_credits: rec.failed_insufficient_credits ?? null,
     mic_skipped_insufficient_credits: rec.mic_skipped_insufficient_credits ?? null,
+    // The production DTO carries NO error text (only the two *_insufficient_credits flags); this
+    // field stays for a future DTO and is null today.
     error_message: typeof rec.error_message === 'string' ? rec.error_message.slice(0, 300) : null,
     created_at: rec.created_at ?? null, updated_at: rec.updated_at ?? null, seenAt: Date.now(),
   };
