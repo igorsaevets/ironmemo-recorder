@@ -8,7 +8,11 @@
  * `eyJ`, `X-Amz-` query strings, `Bearer `). URLs are reduced to origin + path with ids masked.
  */
 
+import { noteError } from './diag.js';
+
 const RING = [];
+/** Error-class events are also counted in the persistent error statistics (diag.js). */
+const ERROR_EVENT = /failed|error|lost|unknown|gone|cut_off|rejected|dead|moving|fallback/i;
 const MAX = 300;
 const SESSION_KEY = 'ironmemo.ingestLog.v1';
 const SECRET_KEY = /(token|access|refresh|authorization|cookie|presigned|signedurl|signed_url|etag|signature|password|code)$/i;
@@ -58,6 +62,7 @@ export function createLog(scope) {
     if (RING.length > MAX) RING.shift();
     console.info(`[ingest:${scope}] ${event}`, entry);
     persist();
+    if (ERROR_EVENT.test(event)) noteError(scope, event, entry);
     return entry;
   };
 }

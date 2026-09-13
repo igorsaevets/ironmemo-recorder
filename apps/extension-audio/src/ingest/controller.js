@@ -20,14 +20,17 @@
 
 import { createLog } from './log.js';
 import { createApi, PATHS, ApiError, TransportError, AuthLostError } from './api.js';
-import { createAuth, hardenStorage } from './auth.js';
+import { createAuth, hardenStorage, ACCOUNT_KEY } from './auth.js';
+import { createClaim, CLAIM_GRACE_MS } from './claim.js';
 import * as ledger from './ledger.js';
 import { pickAsset, openAsset, performUpload, withRetry, sleep, summarizeRecording, AssetError, ROLE_SLUG } from './upload.js';
 import { fetchAndStoreTranscript, requestExport } from './transcript.js';
 
 export const CONSENT_KEY = 'ironmemo.ingestConsent.v1';
-export const CONSENT_VERSION = 1;
-export const CONSENT_TEXT_ID = 'cloud-en-v1';
+// v2 (I4b part 2): the disclosure now says that the e-mail is verified before the first transcription. Nobody
+// outside the benches ever accepted v1 (the feature has not shipped), so the bump costs no one a re-prompt.
+export const CONSENT_VERSION = 2;
+export const CONSENT_TEXT_ID = 'cloud-en-v2-email';
 export const DEFAULT_API_BASE = 'https://app.ironmemo.com';
 const TERMINAL = new Set(['completed', 'error', 'deleted']);
 const RESUMABLE = new Set(['session', 'creating', 'create_unknown', 'uploading', 'finalizing', 'finalize_unknown', 'processing']);
@@ -64,9 +67,12 @@ export class IngestController {
     this.originPattern = `${this.origin}/*`;
     this.enabled = u.enabled !== false;
     this.concurrency = clamp(u.concurrency ?? 3, 1, 8);
+    // 'email' (default, product rule «б» 2026-09-13): a verified e-mail before the first upload; 'guest': the I4a path.
+    this.authMode = u.authMode === 'guest' ? 'guest' : 'email';
     this.log = createLog('controller');
     this.auth = createAuth({ apiOrigin: this.origin, log: createLog('auth') });
     this.api = createApi({ baseUrl: this.origin, auth: this.auth, log: createLog('api') });
+    this.claim = createClaim({ api: this.api, auth: this.auth, log: createLog('claim') });
     this.owner = this.auth.pageId;
     this.jobs = new Map();
     this.running = new Map();
@@ -87,6 +93,7 @@ export class IngestController {
           if (ch.newValue) this.jobs.set(sid, ch.newValue); else this.jobs.delete(sid);
           this.emit(sid);
         } else if (k === CONSENT_KEY) this.consent = ch.newValue ?? null;
+        else if (k === ACCOUNT_KEY) this.emit('__account'); // the account bar re-renders (claim, sign-out, auth loss)
       }
     });
     try {
@@ -95,7 +102,7 @@ export class IngestController {
         if ((p?.origins ?? []).some((o) => o === this.originPattern || o.includes(host))) this.pauseAll('permission_revoked');
       });
     } catch { /* no permissions API in this context */ }
-    this.log('init', { origin: this.origin, jobs: this.jobs.size, consent: this.hasConsent(), hardening: this.hardening });
+    this.log('init', { origin: this.origin, jobs: this.jobs.size, consent: this.hasConsent(), hardening: this.hardening, authMode: this.authMode });
     return this;
   }
 
@@ -117,6 +124,28 @@ export class IngestController {
     try { return await chrome.permissions.contains({ origins: [`${origin}/*`] }); } catch { return false; }
   }
 
+  // ── account / e-mail claim (I4b part 2) ─────────────────────────────────────────────
+  accountStatus() { return this.auth.status(); }
+  /** Product rule «б»: with authMode 'email' nothing is uploaded until the e-mail is verified (a guest or no account → the claim dialog first). */
+  async needsEmail() {
+    if (this.authMode !== 'email') return false;
+    const st = await this.auth.status();
+    return !(st.hasAccount && st.kind === 'user');
+  }
+  /** Sign out = pause running uploads, server logout (best effort) + local wipe; completed jobs remember why the server copy is out of reach. */
+  async signOut() {
+    for (const sid of [...this.running.keys()]) await this.pause(sid, 'signed_out');
+    const r = await this.claim.signOut();
+    for (const job of [...this.jobs.values()]) {
+      if (job.state !== 'completed' || job.localDeleted) continue;
+      job.authLost = { at: Date.now(), reason: 'signed_out' };
+      await ledger.putJob(job); this.jobs.set(job.sessionId, job); this.emit(job.sessionId);
+    }
+    this.log('signed_out', { serverOk: r.serverOk, status: r.status });
+    this.emit('__account');
+    return r;
+  }
+
   // ── observers ────────────────────────────────────────────────────────────────────────
   subscribe(cb) { this.listeners.add(cb); return () => this.listeners.delete(cb); }
   emit(sid) {
@@ -135,6 +164,7 @@ export class IngestController {
     const sid = session.sid;
     if (!this.hasConsent()) throw new Error('Cloud processing has not been accepted yet.');
     if (!(await this.hasPermission())) throw new Error(`Access to ${this.origin} was not granted.`);
+    if (await this.needsEmail()) { const e = new Error('Verify your e-mail first — the free minutes are granted per account.'); e.kind = 'email_required'; throw e; }
     const existing = this.jobs.get(sid);
     if (existing && this.running.has(sid)) return existing;
     if (existing?.state === 'completed') return existing;
@@ -189,6 +219,7 @@ export class IngestController {
     if (!this.hasConsent() || !(await this.hasPermission())) return [];
     const out = [];
     let blocked = false;
+    const acct = await this.auth.status(); // without an identity there is nothing to sync for completed jobs
     for (const job of [...this.jobs.values()]) {
       if (job.localDeleted || !RESUMABLE.has(job.state) || this.running.has(job.sessionId)) continue;
       if (job.state === 'creating') { job.state = 'create_unknown'; job.stateReason = 'page_closed_during_create'; await ledger.putJob(job); }
@@ -199,7 +230,7 @@ export class IngestController {
     // I4b: completed jobs — fetch a transcript that is not stored yet (jobs finished by an
     // earlier version, or a failed fetch), and re-check the server revision once an hour.
     for (const job of [...this.jobs.values()]) {
-      if (job.state !== 'completed' || job.localDeleted || job.serverDeleted || this.running.has(job.sessionId)) continue;
+      if (!acct.hasAccount || job.state !== 'completed' || job.localDeleted || job.serverDeleted || this.running.has(job.sessionId)) continue;
       const t = job.transcript;
       const needFetch = !t || t.state !== 'stored';
       const needCheck = t?.state === 'stored' && Date.now() - (t.checkedAt ?? 0) > REVISION_CHECK_MS;
@@ -243,8 +274,9 @@ export class IngestController {
       if (!lease.ok) throw new Error('Another Recordings tab is already handling this recording.');
       if (job.state === 'paused') { job.state = job.pausedFrom ?? (job.uploadId ? 'uploading' : 'session'); job.pausedFrom = null; }
       else if (job.state === 'error') {
-        if (job.stateReason === 'auth_lost') { await this.auth.logout(); job.state = 'session'; job.userId = null; job.workspaceId = null; job.recordingId = null; job.uploadId = null; job.parts = []; job.singlePut = null; job.transport = null; }
-        else if (job.state === 'error' && job.uploadId) job.state = job.completeIntentAt ? 'finalizing' : 'uploading';
+        if (job.stateReason === 'auth_lost' && this.authMode === 'guest') { await this.auth.logout(); job.state = 'session'; job.userId = null; job.workspaceId = null; job.recordingId = null; job.uploadId = null; job.parts = []; job.singlePut = null; job.transport = null; }
+        // e-mail mode after auth_lost: the reconnect signed into the SAME account (LOGGED_IN) — continue where it stopped
+        else if (job.uploadId) job.state = job.completeIntentAt ? 'finalizing' : 'uploading';
         else if (job.recordingId) job.state = 'uploading';
         else job.state = 'session';
       }
@@ -294,6 +326,7 @@ export class IngestController {
       if (!(await this.hasPermission())) { job.pausedFrom = job.state; job.state = 'paused'; job.stateReason = 'permission_missing'; await save(job); return job; }
 
       if (['session', 'creating', 'create_unknown', 'uploading', 'finalizing', 'finalize_unknown'].includes(job.state)) {
+        if (await this.needsEmail()) { job.pausedFrom = job.state; job.state = 'paused'; job.stateReason = 'email_required'; await save(job); log('paused', { sid, reason: 'email_required' }); return job; }
         const acc = await this.auth.ensureSession();
         job.userId = acc.user?.id ?? null; job.accountKind = acc.kind;
         if (!job.workspaceId) {
@@ -479,6 +512,14 @@ export class IngestController {
       } catch (e) {
         if (e?.name === 'AbortError') throw e;
         if (e instanceof ApiError && e.status === 404) {
+          const st = await this.auth.status();
+          if (st.claimedAt && Date.now() - st.claimedAt < CLAIM_GRACE_MS && !job.serverDeleted) {
+            // MERGED carries the guest's rows across asynchronously (user.merged): inside the grace window a 404 means «moving»
+            job.transcript = { ...(job.transcript ?? {}), checkedAt: Date.now() - REVISION_CHECK_MS + 60_000 };
+            await save(job); this.log('server_copy_moving', { sid, sinceClaimMs: Date.now() - st.claimedAt });
+            if (!this.movingTimer) this.movingTimer = setTimeout(() => { this.movingTimer = null; this.resumeAll().catch(() => {}); }, 60_000);
+            return job;
+          }
           job.serverDeleted = job.serverDeleted ?? { at: Date.now(), reason: 'not_found' };
           job.transcript = { ...(job.transcript ?? {}), checkedAt: Date.now() };
           await save(job); this.log('server_copy_gone', { sid }); return job;
@@ -508,7 +549,13 @@ export class IngestController {
       const t = job.transcript;
       const changed = t?.state === 'stored' && !!t.recordingUpdatedAt && !!rec.updated_at && t.recordingUpdatedAt !== rec.updated_at;
       if (!t || t.state !== 'stored' || changed) {
-        if (changed) this.log('transcript_revision_changed', { sid, from: t.recordingUpdatedAt, to: rec.updated_at });
+        if (changed) {
+          this.log('transcript_revision_changed', { sid, from: t.recordingUpdatedAt, to: rec.updated_at });
+          // an export made before the revision describes the OLD transcript: forget it and remove the file (part-1 carry-over)
+          const stale = Object.values(t.exports ?? {}).map((x) => x?.file).filter(Boolean);
+          job.transcript = { ...t, exports: {} };
+          if (stale.length) { try { const dir = await this.sessionDir(sid); for (const f of stale) { try { await dir.removeEntry(f); } catch { /* already gone */ } } } catch { /* no directory */ } }
+        }
         await this.fetchTranscript(job, signal, save);
       } else {
         job.transcript = { ...t, checkedAt: Date.now() };
@@ -573,6 +620,7 @@ export class IngestController {
     } catch (e) {
       job.transcript.exports[format] = { state: 'error', lastError: errInfo(e), at: Date.now() };
       await save(job);
+      this.log('export_failed', { sid, format, kind: e.kind ?? e.name, status: e.status ?? null, code: e.code ?? null });
       throw e;
     } finally {
       this.running.delete(sid);

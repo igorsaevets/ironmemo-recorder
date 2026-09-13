@@ -108,3 +108,31 @@ footer { display: flex; justify-content: space-between; align-items: center; mar
 .transcript details > summary { cursor: pointer; color: var(--muted); }
 .transcript details[open] > summary { margin-bottom: 6px; }
 a.btn { text-decoration: none; display: inline-block; }
+
+/* ── I4b part 2: account bar, e-mail claim dialog, the session the popup pointed at ──────── */
+.account { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+           padding: 10px 14px; margin-bottom: 16px; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--panel); font-size: 13px; }
+.account[hidden] { display: none; }           /* [hidden] must beat display:flex (memory css-hidden-attribute-trap) */
+.account-text { flex: 1 1 320px; }
+.account-hint { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.account.user { border-color: rgba(70,192,138,.35); }
+.account.lost { border-color: rgba(239,95,107,.4); }
+.account.guest, .account.none { border-color: rgba(240,162,56,.35); }
+.account-actions { white-space: nowrap; }
+.claim-card { max-width: 480px; }
+.claim-text { margin: 0; font-size: 13px; line-height: 1.5; }
+.claim-note { margin: 0; font-size: 12px; color: var(--muted); }
+.claim-note a { color: #a2bcff; }
+.claim-field { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.claim-field input { font: inherit; font-size: 14px; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+                     border-radius: 8px; padding: 9px 10px; }
+.claim-field input:focus { outline: none; border-color: var(--accent); }
+.claim-field input.code-input { font: 22px/1.2 ui-monospace, "SF Mono", Consolas, monospace; letter-spacing: .35em; text-align: center; }
+.claim-field input:disabled { opacity: .5; }
+.claim-step { display: flex; flex-direction: column; gap: 12px; }
+.claim-step[hidden] { display: none; }
+.claim-error[hidden], .claim-info[hidden] { display: none; }
+.claim-buttons { justify-content: flex-end; flex-wrap: wrap; }
+.session.highlight { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,124,255,.35); }
+footer span .btn { margin-left: 8px; }

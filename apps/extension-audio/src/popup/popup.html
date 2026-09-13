@@ -49,6 +49,13 @@
     <button id="stop"  class="btn danger" hidden>Stop</button>
   </div>
 
+  <!-- I4b task 4: after a recording stops, one line that opens the Recordings page on that session.
+       Nothing is uploaded from the popup; the upload starts only on the Recordings page. -->
+  <div class="after-stop" id="afterStop" hidden>
+    <a href="#" id="transcribeLink"></a>
+    <div class="after-stop-hint" id="afterStopHint"></div>
+  </div>
+
   <div class="err" id="err" hidden></div>
   <div class="err" id="warn" hidden style="opacity:.85"></div>
   <div id="errActions" hidden style="margin-top:8px;">

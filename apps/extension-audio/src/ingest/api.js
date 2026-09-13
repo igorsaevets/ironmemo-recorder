@@ -18,6 +18,8 @@ export const PATHS = Object.freeze({
   anonymous: '/auth/api/v1/anonymous/',
   refresh: '/auth/api/v1/token/refresh/',
   me: '/auth/api/v1/me/',
+  logout: '/auth/api/v1/logout/',
+  capabilities: '/auth/api/v1/capabilities/',
   emailRequest: '/auth/api/v1/email/request/',
   emailVerify: '/auth/api/v1/email/verify/',
   workspaces: '/workspaces/api/v1/',
@@ -48,6 +50,12 @@ export class ApiError extends Error {
     if (code === 'error.400.file_too_large') this.kind = 'too_large';
     else if (code === 'error.400.duration_too_long') this.kind = 'too_long';
     else if (code === 'error.402.insufficient_credits' || code === 'error.402.payment_required') this.kind = 'payment';
+    // stapel-auth OTP keys (iron-note-backend docs/auth-frontend.md + the frontend's error registry, read 2026-09-13)
+    else if (code === 'error.400.invalid_code_attempts' || code === 'error.400.invalid_code') this.kind = 'invalid_code';
+    else if (code === 'error.400.code_expired') this.kind = 'code_expired';
+    else if (code === 'error.422.blocked' || code === 'error.423.account_locked') this.kind = 'locked';
+    else if (code === 'error.409.email_taken') this.kind = 'email_taken';
+    else if (code === 'error.400.captcha_required' || code === 'error.400.captcha_invalid') this.kind = 'captcha';
   }
 
   static async fromResponse(res, path) {
@@ -103,15 +111,21 @@ export function templ(path) {
   return String(path).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '{id}');
 }
 
+/** Names the client in the server's logs — statistics without a new endpoint (Igor, 2026-09-13: «и нам тоже, для статистики»). */
+export function clientTag() {
+  try { return `ironmemo-extension/${chrome.runtime.getManifest().version}`; } catch { return 'ironmemo-extension'; }
+}
+
 /**
  * createApi({ baseUrl, auth, log }) → { origin, request, get, post, del }
  * `auth` is the broker from auth.js: getAccess() and refresh({staleAccess}).
  */
 export function createApi({ baseUrl, auth, log = () => {} }) {
   const origin = new URL(baseUrl).origin;
+  const client = clientTag();
 
   async function request(method, path, { json, auth: needAuth = true, replay = true, signal, raw = false } = {}) {
-    const headers = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
+    const headers = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'X-IronMemo-Client': client };
     let body;
     if (json !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(json); }
     let usedAccess = null;

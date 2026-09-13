@@ -20,6 +20,8 @@ import { getByPath } from '../shared/settings-schema.js';
 import { IngestController, waitingSince } from '../ingest/controller.js';
 import { FILES, isTranscriptFile, formatStamp } from '../ingest/transcript.js';
 import { S, reasonText } from '../shared/strings.js';
+import { isPlausibleEmail } from '../ingest/claim.js';
+import { buildDiagnostics } from '../ingest/diag.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -46,6 +48,7 @@ let ingest = null;                 // IngestController, or null when upload.enab
 let settings = null;
 let sessionsById = new Map();
 let pendingConsentSession = null;  // the session whose Transcribe click opened the disclosure
+let accountState = { hasAccount: false, kind: null, lost: null, emailMasked: null }; // mirrors ingest.accountStatus() for rendering
 
 boot().catch((e) => showStatus(`Failed to load the list: ${e?.message ?? e}`, 'error'));
 
@@ -56,11 +59,13 @@ async function boot() {
     try {
       ingest = await new IngestController({ settings }).init();
       ingest.subscribe((sid) => {
+        if (sid === '__account') { renderAccount().then(rerenderAll).catch((e) => console.warn('[session-list] account bar', e)); return; }
         const el = document.querySelector(`.session[data-sid="${cssEscape(sid)}"]`);
         const s = sessionsById.get(sid);
         if (el && s) renderIngest(el, s);
       });
       wireConsentDialog();
+      wireClaimDialog();
       window.addEventListener('pagehide', () => ingest?.releaseAllLeases());
       window.__ironmemoIngest = ingest; // test-bench hook (.claude/scripts/test_ingest.py)
     } catch (e) {
@@ -69,7 +74,10 @@ async function boot() {
       ingest = null;
     }
   }
+  $('copyDiag').addEventListener('click', () => copyDiagnostics());
+  await renderAccount(); // before the list: the waiting-long hint reads accountState
   await refresh();
+  focusHashSession(); // I4b task 4: the popup's line opens this page on #sid=<session>
   if (ingest) ingest.resumeAll().catch((e) => console.warn('[session-list] resume failed', e));
 }
 
@@ -387,7 +395,7 @@ function renderIngest(el, s) {
       // Measured 2026-09-13: `queued` for 3 hours with no error on any route (RESULT I4a §4.3/§4.4).
       cls = 'warn';
       status = S.waitingLong(formatClock(since));
-      hint = `${escapeHtml(S.waitingLongHint(Math.round((Date.now() - since) / 60000), server))} ${escapeHtml(S.waitingLongKeep)}`;
+      hint = `${escapeHtml(S.waitingLongHint(Math.round((Date.now() - since) / 60000), server))} ${escapeHtml(S.waitingLongKeep(accountState.kind === 'user'))}`;
       buttons.push(['check-now', S.btnCheckNow, '']);
     } else {
       status = S.processing(server);
@@ -402,7 +410,7 @@ function renderIngest(el, s) {
     if (cap?.applied) banners.push(['warn', capBannerHtml(cap, job)]);
     if (job.server?.mic_skipped_insufficient_credits) banners.push(['warn', escapeHtml(S.summarySkipped)]);
     if (job.serverDeleted) banners.push(['muted', escapeHtml(S.serverDeleted)]);
-    else if (job.authLost) banners.push(['error', escapeHtml(S.completedAuthLost)]);
+    else if (job.authLost) banners.push(['error', escapeHtml(job.authLost.reason === 'signed_out' ? S.completedSignedOut : S.completedAuthLost)]);
     const t = job.transcript;
     if (!t || t.state === 'pending') hint = escapeHtml(S.transcriptFetching);
     else if (t.state === 'error') {
@@ -426,7 +434,7 @@ function renderIngest(el, s) {
     } else if (r === 'too_large' || r === 'too_long') {
       status = S.tooLarge; hint = escapeHtml(job.lastError?.message ?? '');
     } else if (r === 'auth_lost') {
-      status = S.lostSession; hint = escapeHtml(S.lostSessionHint);
+      status = S.lostSession; hint = escapeHtml(S.lostSessionHint(ingest.authMode === 'email'));
       buttons.push(['ingest-retry', S.btnReconnect, 'primary']);
     } else {
       status = S.failed(reasonText(r));
@@ -438,7 +446,9 @@ function renderIngest(el, s) {
     cls = 'muted';
     status = S.paused[job.stateReason] ?? S.pausedOther(job.stateReason);
     hint = escapeHtml(S.pausedHint);
-    buttons.push(['ingest-resume', S.btnResume, 'primary'], ['ingest-cancel', S.btnCancel, 'danger']);
+    if (job.stateReason === 'email_required' || job.stateReason === 'signed_out') buttons.push(['claim-open', job.stateReason === 'signed_out' ? S.account.btnReconnect : S.account.btnAddEmail, 'primary']);
+    else buttons.push(['ingest-resume', S.btnResume, 'primary']);
+    buttons.push(['ingest-cancel', S.btnCancel, 'danger']);
   } else {
     status = `State: ${st}`;
   }
@@ -553,7 +563,8 @@ function wireConsentDialog() {
       const granted = await permission;
       hideConsent();
       const s = pendingConsentSession; pendingConsentSession = null;
-      if (!granted) { showStatus('Access to app.ironmemo.com was not granted — nothing was sent. Click Transcribe again to retry.', 'error'); if (s) rerender(s.sid); return; }
+      if (!granted) { showStatus(S.notGrantedRetry, 'error'); if (s) rerender(s.sid); return; }
+      if (s && await ingest.needsEmail()) { showClaim({ reason: 'transcribe', session: s, after: () => startIngest(s) }); return; } // product rule «б»: the e-mail before the first upload
       if (s) await startIngest(s);
     } catch (e) {
       hideConsent();
@@ -574,7 +585,8 @@ async function onTranscribeClick(session) {
   if (!ingest) return;
   if (!ingest.hasConsent()) { showConsent(session); return; }
   const granted = await ingest.requestPermission(); // first await → still inside the gesture
-  if (!granted) { showStatus('Access to app.ironmemo.com was not granted — nothing was sent.', 'error'); return; }
+  if (!granted) { showStatus(S.notGranted, 'error'); return; }
+  if (await ingest.needsEmail()) { showClaim({ reason: 'transcribe', session, after: () => startIngest(session) }); return; }
   await startIngest(session);
 }
 
@@ -593,6 +605,12 @@ function rerender(sid) {
   const s = sessionsById.get(sid);
   if (el && s) renderIngest(el, s);
 }
+function rerenderAll() { for (const sid of sessionsById.keys()) rerender(sid); }
+
+async function resumeJob(session) {
+  try { await ingest.resume(session.sid); } catch (err) { showStatus(err?.message ?? String(err), 'error'); }
+  rerender(session.sid);
+}
 
 async function handleAction(e, session, sessionEl) {
   const btn = e.target.closest('button[data-action]');
@@ -603,9 +621,16 @@ async function handleAction(e, session, sessionEl) {
   if (action === 'ingest-resume' || action === 'ingest-retry') {
     if (!ingest) return;
     const granted = await ingest.requestPermission(); // sync call inside the click → user gesture
-    if (!granted) { showStatus('Access to app.ironmemo.com was not granted.', 'error'); return; }
-    try { await ingest.resume(session.sid); } catch (err) { showStatus(err?.message ?? String(err), 'error'); }
-    rerender(session.sid);
+    if (!granted) { showStatus(S.notGranted, 'error'); return; }
+    // e-mail mode: a lost session or a job paused for the e-mail goes through the claim dialog first
+    if (await ingest.needsEmail()) { showClaim({ reason: accountState.lost ? 'reconnect' : 'transcribe', session, after: () => resumeJob(session) }); return; }
+    await resumeJob(session);
+    return;
+  }
+  if (action === 'claim-open') {
+    if (!ingest) return;
+    const job = ingest.getJob(session.sid);
+    showClaim({ reason: job?.stateReason === 'signed_out' || accountState.lost ? 'reconnect' : 'transcribe', session, after: () => resumeJob(session) });
     return;
   }
   if (action === 'ingest-pause') { if (ingest) await ingest.pause(session.sid, 'user'); rerender(session.sid); return; }
@@ -804,6 +829,202 @@ async function downloadLocal(sid, name, ext, startedAt) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+// ── I4b part 2: account bar ──
+
+async function renderAccount() {
+  const bar = $('account');
+  if (!bar) return;
+  if (!ingest) { bar.hidden = true; return; }
+  const st = await ingest.accountStatus();
+  accountState = st;
+  let cls, text, hint = '';
+  const btns = [];
+  if (st.lost) { cls = 'lost'; text = S.account.lost; btns.push(['claim-open', S.account.btnReconnect, 'primary']); }
+  else if (!st.hasAccount) { cls = 'none'; text = S.account.none; btns.push(['claim-open', S.account.btnAddEmail, 'primary']); }
+  else if (st.kind === 'user') { cls = 'user'; text = S.account.user(st.emailMasked ?? '…'); hint = S.account.userHint; btns.push(['sign-out', S.account.btnSignOut, 'ghost']); }
+  else { cls = 'guest'; text = S.account.guest; btns.push(['claim-open', S.account.btnAddEmail, 'primary']); }
+  bar.className = `account ${cls}`;
+  bar.innerHTML = `<div class="account-text">${escapeHtml(text)}${hint ? `<div class="account-hint">${escapeHtml(hint)}</div>` : ''}</div>`
+    + `<div class="account-actions">${btns.map(([a, label, k]) => `<button class="btn ${k}" data-account-action="${a}">${escapeHtml(label)}</button>`).join('')}</div>`;
+  bar.hidden = false;
+  bar.onclick = async (e) => {
+    const btn = e.target.closest('button[data-account-action]');
+    if (!btn) return;
+    if (btn.dataset.accountAction === 'claim-open') { showClaim({ reason: st.lost ? 'reconnect' : 'keep' }); return; }
+    if (btn.dataset.accountAction === 'sign-out') {
+      if (!confirm(S.account.confirmSignOut)) return;
+      btn.disabled = true;
+      try { const r = await ingest.signOut(); showStatus(r.serverOk ? S.account.signedOut : S.account.signedOutServerFailed, r.serverOk ? 'ok' : ''); }
+      catch (err) { showStatus(err?.message ?? String(err), 'error'); }
+      await renderAccount(); rerenderAll();
+    }
+  };
+}
+
+/** The popup's line opens this page on #sid=<session>: scroll there and mark it for a few seconds (task 4). */
+function focusHashSession() {
+  const sid = new URLSearchParams(location.hash.replace(/^#/, '')).get('sid');
+  if (!sid) return;
+  const el = document.querySelector(`.session[data-sid="${cssEscape(sid)}"]`);
+  if (!el) return;
+  el.classList.add('highlight');
+  el.scrollIntoView({ block: 'start' });
+  setTimeout(() => el.classList.remove('highlight'), 6000);
+}
+
+async function copyDiagnostics() {
+  try {
+    const payload = await buildDiagnostics({ jobs: ingest ? [...ingest.jobs.values()] : [], account: ingest ? await ingest.accountStatus() : null });
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    showStatus(S.account.diagnosticsCopied, 'ok');
+  } catch (e) { showStatus(S.account.diagnosticsFailed(e?.message ?? e), 'error'); }
+}
+
+// ── I4b part 2: e-mail claim dialog ──
+
+const claim = { reason: null, session: null, after: null, pending: null, timer: null, busy: false, locked: false };
+
+function wireClaimDialog() {
+  const C = S.claim;
+  $('claimEmailLabel').textContent = C.emailLabel; $('claimPrivacy').textContent = C.privacyNote; $('claimPrivacyLink').textContent = C.privacyLink;
+  $('claimCancel').textContent = C.btnNotNow; $('claimSend').textContent = C.btnSendCode; $('claimVerify').textContent = C.btnVerify;
+  $('claimResend').textContent = C.btnResend; $('claimOther').textContent = C.btnOtherEmail; $('claimContinue').textContent = C.btnContinue;
+  $('claimCancel').addEventListener('click', () => hideClaim());
+  $('claimSend').addEventListener('click', () => onClaimSend({ resend: false }));
+  $('claimResend').addEventListener('click', () => onClaimSend({ resend: true }));
+  $('claimVerify').addEventListener('click', () => onClaimVerify());
+  $('claimOther').addEventListener('click', () => { ingest.claim.clear().catch(() => {}); claim.pending = null; claim.locked = false; claimStep('email'); });
+  $('claimContinue').addEventListener('click', () => { const after = claim.after; hideClaim(); if (after) after(); });
+  $('claimEmail').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); onClaimSend({ resend: false }); } });
+  $('claimCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); onClaimVerify(); } });
+}
+
+/** reason: 'transcribe' (before the first upload) | 'keep' (from the account bar) | 'reconnect' (lost session / signed out). */
+async function showClaim({ reason, session = null, after = null }) {
+  if (!ingest) return;
+  const C = S.claim;
+  claim.reason = reason; claim.session = session; claim.after = after; claim.locked = false;
+  $('claimTitle').textContent = reason === 'reconnect' ? C.titleReconnect : C.title;
+  $('claimIntro').textContent = reason === 'transcribe' ? C.introTranscribe : reason === 'reconnect' ? C.introReconnect : C.introKeep;
+  $('claimCancel').textContent = C.btnNotNow;
+  claimError('email', null); claimError('code', null);
+  const pending = await ingest.claim.pending();
+  if (pending?.email && Date.now() - pending.requestedAt < (pending.ttlSeconds ?? 600) * 1000 && !(pending.lockedUntil && pending.lockedUntil > Date.now())) {
+    claim.pending = pending; claimStep('code'); startCooldown();
+  } else { claim.pending = null; claimStep('email'); }
+  $('claim').hidden = false;
+  setTimeout(() => ($('claimStepCode').hidden ? $('claimEmail') : $('claimCode')).focus(), 50);
+}
+
+function hideClaim() {
+  $('claim').hidden = true;
+  clearInterval(claim.timer); claim.timer = null;
+  const s = claim.session; claim.session = null; claim.after = null;
+  if (s) rerender(s.sid);
+}
+
+function claimStep(step) {
+  const C = S.claim;
+  $('claimStepEmail').hidden = step !== 'email'; $('claimStepCode').hidden = step !== 'code'; $('claimStepDone').hidden = step !== 'done';
+  if (step === 'code' && claim.pending) {
+    $('claimSentText').textContent = C.codeSent(claim.pending.target, Math.round((claim.pending.ttlSeconds ?? 600) / 60));
+    $('claimCodeLabel').textContent = C.codeLabel(claim.pending.codeLength ?? 6);
+    claim.locked = !!(claim.pending.lockedUntil && claim.pending.lockedUntil > Date.now());
+    $('claimCode').value = ''; $('claimCode').disabled = claim.locked; $('claimVerify').disabled = claim.locked;
+    claimError('code', null); // a message from an earlier e-mail must not survive a fresh code
+    if (claim.locked) claimError('code', C.errors.locked(Math.max(1, Math.ceil((claim.pending.lockedUntil - Date.now()) / 60000))));
+    else if (claim.pending.attemptsRemaining != null && claim.pending.lastError?.kind === 'invalid_code') claimError('code', C.attemptsLeft(claim.pending.attemptsRemaining));
+    setTimeout(() => $('claimCode').focus(), 50);
+  }
+  if (step === 'email') { $('claimSend').disabled = false; $('claimSend').textContent = C.btnSendCode; setTimeout(() => $('claimEmail').focus(), 50); }
+}
+
+function claimError(where, text) {
+  const el = $(where === 'code' ? 'claimErrorCode' : 'claimErrorEmail');
+  el.textContent = text ?? ''; el.hidden = !text;
+}
+
+function claimErrorText(err) {
+  const E = S.claim.errors;
+  switch (err?.kind) {
+    case 'invalid_email': return E.invalid_email;
+    case 'invalid_code': return err.attemptsRemaining != null ? S.claim.attemptsLeft(err.attemptsRemaining) : E.invalid_code;
+    case 'code_expired': return E.code_expired;
+    case 'locked': return E.locked(err.retryAfterMinutes ?? 15);
+    case 'rate_limited': return E.rate_limited(err.retryAfterMinutes ? `${err.retryAfterMinutes} min` : `${claim.pending?.cooldownSeconds ?? 30} s`);
+    case 'email_taken': return E.email_taken;
+    case 'captcha': return E.captcha;
+    case 'auth_lost': return E.auth_lost;
+    case 'transport': return E.transport;
+    case 'server': return E.server;
+    default: return E.other(err?.message ?? String(err));
+  }
+}
+
+function startCooldown(seconds = null) {
+  const p = claim.pending;
+  const total = seconds ?? (p?.cooldownSeconds ?? 30);
+  const until = seconds != null ? Date.now() + seconds * 1000 : (p?.requestedAt ?? Date.now()) + total * 1000;
+  clearInterval(claim.timer);
+  const b = $('claimResend');
+  const tick = () => {
+    const left = Math.ceil((until - Date.now()) / 1000);
+    if (left > 0) { b.disabled = true; b.textContent = S.claim.btnResendIn(left); }
+    else { b.disabled = false; b.textContent = S.claim.btnResend; clearInterval(claim.timer); claim.timer = null; }
+  };
+  tick(); claim.timer = setInterval(tick, 500);
+}
+
+function claimBusy(on, label = null) {
+  claim.busy = on;
+  for (const id of ['claimSend', 'claimVerify', 'claimOther', 'claimCancel', 'claimResend']) $(id).disabled = on;
+  if (claim.locked) { $('claimVerify').disabled = true; $('claimCode').disabled = true; } // a server-side lock outlives the busy state
+  if (label) { const b = $('claimStepCode').hidden ? $('claimSend') : $('claimVerify'); b.textContent = label; }
+  if (!on) { $('claimSend').textContent = S.claim.btnSendCode; $('claimVerify').textContent = S.claim.btnVerify; }
+  if (!on && claim.timer) $('claimResend').disabled = true; // the cooldown owns this button while it runs
+}
+
+async function onClaimSend({ resend }) {
+  if (claim.busy) return;
+  const email = resend ? claim.pending?.email : $('claimEmail').value;
+  const where = resend ? 'code' : 'email';
+  claimError(where, null);
+  if (!isPlausibleEmail(email)) { claimError(where, S.claim.errors.invalid_email); return; }
+  const permission = ingest.requestPermission(); // first call inside the click → user gesture (Chrome may show its prompt)
+  claimBusy(true, S.claim.sending);
+  try {
+    const granted = await permission;
+    if (!granted) { claimError(where, S.notGranted); return; }
+    const caps = await ingest.claim.capabilities();
+    if (caps.emailEnabled === false) { claimError(where, S.claim.errors.disabled); return; }
+    claim.pending = await ingest.claim.requestCode(email, { resend });
+    claimStep('code'); startCooldown();
+  } catch (err) {
+    claimError(where, claimErrorText(err));
+    if (err?.kind === 'rate_limited' && resend) startCooldown(err.retryAfterMinutes ? err.retryAfterMinutes * 60 : (claim.pending?.cooldownSeconds ?? 30));
+  } finally { claimBusy(false); }
+}
+
+async function onClaimVerify() {
+  if (claim.busy) return;
+  const code = $('claimCode').value.trim();
+  claimError('code', null);
+  if (!code) { claimError('code', S.claim.errors.invalid_code); return; }
+  claimBusy(true, S.claim.verifying);
+  try {
+    const r = await ingest.claim.verify(code);
+    const done = S.claim.done[r.status] ?? ((t) => S.claim.done.other(t, r.status));
+    $('claimDoneText').textContent = done(r.emailMasked ?? '');
+    $('claimDoneHint').textContent = S.claim.doneHint + (claim.pending?.guestUserId && !r.withGuest ? ` ${S.claim.notMerged}` : '');
+    clearInterval(claim.timer); claim.timer = null;
+    claimStep('done');
+    await renderAccount(); rerenderAll();
+  } catch (err) {
+    claimError('code', claimErrorText(err));
+    if (err?.kind === 'locked') claim.locked = true;
+  } finally { claimBusy(false); }
 }
 
 // ─────────────────────────────────────────────────────────── format helpers ──

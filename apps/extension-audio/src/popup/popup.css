@@ -67,6 +67,14 @@ body { width: 320px; margin: 0; padding: 14px; background: var(--bg); color: var
 .consent details.en summary { cursor: pointer; padding: 4px 0; color: var(--text); }
 .consent details.en p { font-size: 11px; color: var(--muted); margin-top: 6px; }
 
+/* I4b task 4: the line after a recording stops (opens the Recordings page on that session) */
+.after-stop { margin-top: 10px; padding: 8px 10px; border-radius: 8px;
+              background: rgba(79,124,255,.10); border: 1px solid rgba(79,124,255,.35); }
+.after-stop[hidden] { display: none; }
+.after-stop a { color: #dfe6ff; font-weight: 500; text-decoration: none; font-size: 13px; }
+.after-stop a:hover { text-decoration: underline; }
+.after-stop-hint { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
 /* I4b: one-time update notice (existing users), dismissed with "keep recording locally" */
 .notice { margin: 8px 0; padding: 8px 10px; border-radius: 8px; font-size: 12px; line-height: 1.45;
           background: rgba(79,124,255,.10); border: 1px solid rgba(79,124,255,.35); color: #dfe6ff; }

@@ -209,6 +209,7 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
     return await setState({
       status: 'recording', sessionId, startedAt: Date.now(),
       appliedReport: res.appliedReport ?? null, startTimings: T,
+      lastStopped: null, // I4b: the popup's «Transcribe with IronMemo →» line refers to the LAST stopped recording
     });
   } catch (e) {
     const raw = String(e?.message ?? e);
@@ -242,11 +243,14 @@ function translateError(raw) {
 }
 
 async function stopCapture() {
+  const prev = await getState();
   const res = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'STOP' })
     .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   const next = await setState({
     status: 'idle', sessionId: null, startedAt: null, progress: null, lastWarning: null, lastInfo: null,
     lastResult: res?.result ?? null, error: res?.ok ? null : (res?.error ?? null),
+    // I4b task 4: the popup offers one line «Transcribe with IronMemo →» for the recording that just stopped
+    lastStopped: prev?.sessionId && res?.ok ? { sessionId: prev.sessionId, at: Date.now() } : null,
   });
   await closeOffscreenIfIdle();
   return next;

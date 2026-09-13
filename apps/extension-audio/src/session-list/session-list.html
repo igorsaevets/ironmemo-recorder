@@ -13,6 +13,9 @@
 
   <div id="status" class="status" hidden></div>
 
+  <!-- I4b part 2: the IronMemo account this extension uses — none / guest from an earlier build / verified e-mail / lost -->
+  <div id="account" class="account" hidden></div>
+
   <div id="empty" class="empty" hidden>
     <div class="empty-title">No recordings yet</div>
     <div class="empty-hint">Click the extension icon in the Chrome toolbar, then Start recording.</div>
@@ -22,7 +25,7 @@
 
   <footer>
     <div>Total sessions: <span id="totalCount">0</span> · On disk: <span id="totalSize">0</span></div>
-    <button id="refresh" class="btn ghost">Refresh</button>
+    <span><button id="copyDiag" class="btn ghost" title="Versions, states and error counts for a support message — no recordings, no e-mail">Copy diagnostics</button><button id="refresh" class="btn ghost">Refresh</button></span>
   </footer>
 
   <!-- Cloud disclosure: shown once before the FIRST upload ever (ironmemo.ingestConsent.v1).
@@ -33,8 +36,8 @@
       <h2 id="cloudConsentTitle">Send this recording to IronMemo?</h2>
       <div class="consent-scroll">
         <p><b>What is sent:</b> the audio file of the recording you chose (the mix, or the single track), its title (date and time), the source type (meeting or dictaphone), its duration and size. <b>Not sent:</b> other recordings, page content, browsing history.</p>
-        <p><b>Where:</b> to IronMemo servers (app.ironmemo.com) and their speech-to-text sub-processors, to produce a transcript. A guest account is created for you automatically; you can attach your e-mail later to keep access to it. Server copies can be deleted from IronMemo.</p>
-        <p><b>Cost:</b> Your first 10 minutes of transcription are free (per account, not per recording); after that a recording needs IronMemo credits. The audio is kept on the server for a later unlock.</p>
+        <p><b>Where:</b> to IronMemo servers (app.ironmemo.com) and their speech-to-text sub-processors, to produce a transcript. Your e-mail is verified with a one-time code before the first transcription: IronMemo uses your existing account for that e-mail or creates one — no password. Server copies can be deleted from IronMemo.</p>
+        <p><b>Cost:</b> Your first 10 minutes of transcription are free (per account, not per recording — granted once your e-mail is verified); after that a recording needs IronMemo credits. The audio is kept on the server for a later unlock.</p>
         <p><b>When:</b> only when you click Transcribe on a recording. Nothing is uploaded automatically, and your existing recordings stay local until you choose one.</p>
         <p>Details: <a href="https://igorsaevets.github.io/ironmemo-recorder/privacy-policy.html" target="_blank" rel="noopener">Privacy Policy</a>. After you continue, Chrome asks to let the extension access app.ironmemo.com.</p>
       </div>
@@ -45,6 +48,32 @@
       <div class="consent-buttons">
         <button id="cloudConsentCancel" class="btn ghost">Not now</button>
         <button id="cloudConsentContinue" class="btn primary" disabled>Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- I4b part 2: e-mail claim — a one-time code, no password. Step 1 e-mail → step 2 code → step 3 done.
+       Every string is set from src/shared/strings.js (S.claim) so the i18n layer can swap them. -->
+  <div id="claim" class="consent-overlay" hidden>
+    <div class="consent-card claim-card" role="dialog" aria-labelledby="claimTitle">
+      <h2 id="claimTitle"></h2>
+      <div id="claimStepEmail" class="claim-step">
+        <p id="claimIntro" class="claim-text"></p>
+        <label class="claim-field"><span id="claimEmailLabel"></span><input type="email" id="claimEmail" autocomplete="email" inputmode="email" spellcheck="false" maxlength="254"></label>
+        <p class="claim-note"><span id="claimPrivacy"></span><a href="https://igorsaevets.github.io/ironmemo-recorder/privacy-policy.html" target="_blank" rel="noopener" id="claimPrivacyLink"></a></p>
+        <div class="banner error claim-error" id="claimErrorEmail" hidden></div>
+        <div class="consent-buttons"><button id="claimCancel" class="btn ghost"></button><button id="claimSend" class="btn primary"></button></div>
+      </div>
+      <div id="claimStepCode" class="claim-step" hidden>
+        <p id="claimSentText" class="claim-text"></p>
+        <label class="claim-field"><span id="claimCodeLabel"></span><input type="text" id="claimCode" class="code-input" inputmode="numeric" autocomplete="one-time-code" spellcheck="false" maxlength="12"></label>
+        <div class="banner error claim-error" id="claimErrorCode" hidden></div>
+        <div class="consent-buttons claim-buttons"><button id="claimOther" class="btn ghost"></button><button id="claimResend" class="btn"></button><button id="claimVerify" class="btn primary"></button></div>
+      </div>
+      <div id="claimStepDone" class="claim-step" hidden>
+        <p id="claimDoneText" class="claim-text"></p>
+        <p id="claimDoneHint" class="claim-note"></p>
+        <div class="consent-buttons"><button id="claimContinue" class="btn primary"></button></div>
       </div>
     </div>
   </div>

@@ -41,7 +41,9 @@ export const S = Object.freeze({
   // ── waiting long (measured 2026-09-13: a 3-hour `queued` with no error on any route) ──
   waitingLong: (clock) => `Waiting for the server… since ${clock}`,
   waitingLongHint: (minutes, server) => `IronMemo has not finished this recording for ${minutes} min (server status: ${server}). It usually takes under a minute; the upload is safe on the server and this page keeps checking.`,
-  waitingLongKeep: 'Your guest session keeps the recording for 7 days of inactivity — adding your e-mail (coming in the next version) makes the access permanent.',
+  waitingLongKeep: (isUser) => (isUser
+    ? 'The upload is safe on the server under your IronMemo account.'
+    : 'Your guest session keeps the recording for 7 days of inactivity — add your e-mail (the bar above the list) to make the access permanent.'),
   btnCheckNow: 'Check now',
 
   // ── completed ──
@@ -65,8 +67,9 @@ export const S = Object.freeze({
   summaryStale: 'The summary is older than the latest transcript edits on IronMemo.',
   summarySkipped: 'Summary skipped: the account had no credits for it. The transcript itself is complete.',
   openOnIronMemo: 'Open on IronMemo',
-  openCaveat: '(the website asks you to sign in — guest recordings become visible there after you add your e-mail, coming in the next version).',
-  completedAuthLost: 'The saved IronMemo session is no longer valid; the server copy stays under the old guest account. The local files below are yours.',
+  openCaveat: '(the website asks you to sign in — use the same e-mail as in this extension).',
+  completedAuthLost: 'The saved IronMemo session is no longer valid; the server copy stays under the account it was uploaded with. Reconnect with the same e-mail (the bar above the list) to reach it again. The local files below are yours.',
+  completedSignedOut: 'You signed out of IronMemo in this extension; the server copy stays under your account (sign in on the website, or reconnect here with the same e-mail). The local files below are yours.',
 
   // ── free cap (the DTO's free_cap block; never a per-account counter) ──
   capBanner: (cap, original) => `First ${cap} of ${original} transcribed — the free limit applied to this recording. The whole file was uploaded and is kept on the server; nothing beyond ${cap} was transcribed.`,
@@ -91,7 +94,9 @@ export const S = Object.freeze({
   networkErrorHint: 'Check your internet connection, then Retry. Nothing was lost: the upload continues from the last confirmed part.',
   tooLarge: 'The file is larger than IronMemo accepts.',
   lostSession: 'Your IronMemo session is no longer valid.',
-  lostSessionHint: 'Reconnect starts a NEW guest session and sends this recording again. Recordings uploaded under the old session stay on IronMemo but this extension can no longer open them — add your e-mail early next time (coming in the next version).',
+  lostSessionHint: (emailMode) => (emailMode
+    ? 'Reconnect verifies your e-mail again (a one-time code) and continues this upload under the same IronMemo account.'
+    : 'Reconnect starts a NEW guest session and sends this recording again. Recordings uploaded under the old session stay on IronMemo but this extension can no longer open them.'),
   btnReconnect: 'Reconnect',
   btnRetry: 'Retry',
   btnDismiss: 'Dismiss',
@@ -116,6 +121,13 @@ export const S = Object.freeze({
     storage_forbidden: 'the storage refused the upload link',
     origin: 'storage origin not allowed',
     rate_limited: 'too many requests — try later',
+    email_required: 'the e-mail is not verified yet',
+    signed_out: 'you signed out of IronMemo',
+    invalid_code: 'the code was not accepted',
+    code_expired: 'the code expired',
+    locked: 'too many wrong codes — locked for a while',
+    email_taken: 'this e-mail belongs to another IronMemo account',
+    captcha: 'IronMemo asks for a captcha on this network',
     server_error: 'IronMemo could not process the recording',
     server_deleted: 'the recording was deleted on IronMemo',
     not_found: 'the transcript is not on the server yet',
@@ -133,6 +145,8 @@ export const S = Object.freeze({
     consent_missing: 'Paused: cloud processing has not been accepted.',
     user: 'Paused by you.',
     check_now: 'Checking…',
+    email_required: 'Paused: verify your e-mail to continue — the free minutes are granted per account.',
+    signed_out: 'Paused: you signed out of IronMemo. Reconnect with your e-mail to continue.',
   }),
   pausedOther: (reason) => `Paused (${reason ?? 'unknown'}).`,
   pausedHint: 'Local files are untouched. Resume continues from the last confirmed part.',
@@ -140,6 +154,72 @@ export const S = Object.freeze({
   cancelledLocalDeleted: 'Upload cancelled: the local files were deleted.',
   cancelledServerRemain: (id8) => (id8 ? `An empty recording may remain on IronMemo (id ${id8}…).` : ''),
   confirmCancel: 'Cancel the upload to IronMemo? Local files stay.',
+
+  // ── account bar (I4b part 2) ──
+  account: Object.freeze({
+    none: 'Not connected to IronMemo yet. Your e-mail is verified with a one-time code before the first transcription — 10 free minutes per account, no password.',
+    guest: 'Guest session on IronMemo (from an earlier version). It keeps your recordings for 7 days of inactivity — add your e-mail to keep them and to get your free minutes.',
+    user: (masked) => `IronMemo account: ${masked}`,
+    userHint: 'Sign in on app.ironmemo.com with this e-mail to see the same recordings on the website.',
+    lost: 'Your IronMemo session is no longer valid. Reconnect with your e-mail to keep working with the server copies.',
+    btnAddEmail: 'Add your e-mail',
+    btnReconnect: 'Reconnect',
+    btnSignOut: 'Sign out',
+    btnDiagnostics: 'Copy diagnostics',
+    diagnosticsCopied: 'Diagnostics copied to the clipboard: versions, states and error counts — no recordings, no e-mail.',
+    diagnosticsFailed: (msg) => `Could not copy the diagnostics: ${msg}`,
+    confirmSignOut: 'Sign out of IronMemo in this extension? The server copies stay under your account (sign in on the website, or reconnect here with the same e-mail). Local files are untouched; an upload in progress is paused.',
+    signedOut: 'Signed out of IronMemo. Local files are untouched.',
+    signedOutServerFailed: 'Signed out in this extension; the server did not confirm the logout (the session expires on its own).',
+  }),
+
+  // ── e-mail claim dialog (I4b part 2): a one-time code, no password ──
+  claim: Object.freeze({
+    title: 'Add your e-mail',
+    titleReconnect: 'Reconnect to IronMemo',
+    introTranscribe: 'IronMemo verifies your e-mail before the first transcription: the 10 free minutes are granted per account, and the e-mail is what lets you sign in on the website later. A one-time code is sent to your e-mail — no password.',
+    introKeep: 'Your recordings on IronMemo are kept under an account. Verify your e-mail once with a one-time code — no password. An existing IronMemo account with this e-mail is used; otherwise one is created.',
+    introReconnect: 'Verify your e-mail again to continue with the same IronMemo account. A one-time code, no password.',
+    privacyNote: 'The e-mail is sent to IronMemo (app.ironmemo.com) to deliver the code and becomes the login of the account. ',
+    privacyLink: 'Privacy Policy',
+    emailLabel: 'E-mail',
+    btnSendCode: 'Send code',
+    btnNotNow: 'Not now',
+    sending: 'Sending…',
+    codeSent: (target, minutes) => `We sent a code to ${target}. It is valid for ${minutes} minutes.`,
+    codeLabel: (n) => `Code from the e-mail (${n} digits)`,
+    btnVerify: 'Verify',
+    verifying: 'Verifying…',
+    btnResend: 'Resend code',
+    btnResendIn: (s) => `Resend in ${s} s`,
+    btnOtherEmail: 'Use another e-mail',
+    attemptsLeft: (n) => `Wrong code — ${n} attempt(s) left. Check the newest e-mail from IronMemo.`,
+    errors: Object.freeze({
+      invalid_email: 'That does not look like an e-mail address.',
+      invalid_code: 'Wrong code. Check the newest e-mail from IronMemo.',
+      code_expired: 'The code expired. Ask for a new one.',
+      locked: (min) => `Too many wrong codes — this e-mail is locked for ${min} minute(s). Try again later.`,
+      rate_limited: (wait) => `A code was sent recently. You can ask for a new one in ${wait}.`,
+      email_taken: 'This e-mail already belongs to another IronMemo account. Sign out first, then use it.',
+      captcha: 'IronMemo asks for a captcha on this network — sign in on the website instead.',
+      auth_lost: 'The guest session had expired, so the earlier recordings could not be merged; the e-mail itself was accepted.',
+      transport: 'No connection to IronMemo. Check your internet connection and try again.',
+      server: 'IronMemo answered with a server error. Try again in a minute.',
+      disabled: 'E-mail sign-in is switched off on this server — sign in on the website.',
+      other: (msg) => `Could not complete: ${msg}`,
+    }),
+    done: Object.freeze({
+      MERGED: (target) => `Done — ${target} is your IronMemo account. The guest recordings from this browser were merged into it.`,
+      REGISTERED: (target) => `Done — an IronMemo account was created for ${target}. The recordings from this browser stay with it.`,
+      LOGGED_IN: (target) => `Done — signed in to the IronMemo account ${target}.`,
+      MODIFIED: (target) => `Done — ${target} is now the e-mail of your IronMemo account.`,
+      other: (target, status) => `Done — connected as ${target} (${status}).`,
+    }),
+    doneHint: 'Sign in on app.ironmemo.com with the same e-mail to see the recordings on the website.',
+    notMerged: 'The earlier guest session had expired, so its recordings could not be merged into this account.',
+    btnContinue: 'Continue',
+    btnClose: 'Close',
+  }),
 
   // ── page-level messages ──
   notGranted: 'Access to app.ironmemo.com was not granted — nothing was sent.',
@@ -155,6 +235,9 @@ export const S = Object.freeze({
 export const POPUP = Object.freeze({
   noticeText: 'New in this version: a recording can optionally be sent to IronMemo for transcription — from the Recordings page, one recording at a time, after a separate disclosure. Nothing is uploaded automatically and your existing recordings stay local. Keep recording locally as before, or click Transcribe on a recording when you want a transcript.',
   noticeOk: 'Got it — keep recording locally',
+  // I4b task 4: the line after a recording stops (opens the Recordings page on that session; nothing is uploaded from the popup)
+  transcribeLine: 'Transcribe with IronMemo →',
+  transcribeHint: 'Opens the Recordings page on this recording. Nothing is uploaded until you click Transcribe there.',
 });
 
 /** Reason → sentence, with a readable fallback for reasons the map does not know. */

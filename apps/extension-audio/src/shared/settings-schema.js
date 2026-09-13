@@ -681,18 +681,21 @@ export const SETTINGS = [
   },
   {
     key: 'upload.authMode', group: 'upload', type: 'enum', stage: 'experiment',
-    label: 'Authentication', default: 'guest',
+    label: 'Authentication', default: 'email',
     options: [
+      { value: 'email', label: 'E-mail code before the first upload (a verified IronMemo account)',
+        hint: 'product rule 2026-09-13: the 10 free minutes per account are granted only after the e-mail is verified; an existing guest is merged into the account' },
       { value: 'guest', label: 'Guest session (POST /auth/api/v1/anonymous/), claim by e-mail later',
-        hint: 'official backend feature since 2026-09-12: 10 free minutes per recording, starter credits' },
+        hint: 'legacy / bench: the server still allows a guest to upload and transcribe (10 free minutes per recording there); the product rule says otherwise' },
       { value: 'oauth_pkce', label: 'OAuth Authorization Code + PKCE S256',
         hint: 'not available: the callback redirects only to a same-origin URI (measured 2026-09-13)' },
       { value: 'personal_token', label: 'Личный токен',
         risk: 'Долгоживущий токен в chrome.storage. Расширение — публичный клиент без защищённого хранилища.' },
       { value: 'none', label: 'Без авторизации (только локальный стенд)' },
     ],
-    why: 'Guest first: the extension never asks for a password; the guest key lives in chrome.storage.local '
-       + '(TRUSTED_CONTEXTS) and is the ONLY key to the server copies until the e-mail claim (I4b).',
+    why: 'No password ever: an e-mail code (stapel-auth OTP) creates or opens the IronMemo account before the first '
+       + 'upload (I4b part 2, Igor\'s rule «б» 2026-09-13); the refresh credential lives in chrome.storage.local '
+       + '(TRUSTED_CONTEXTS). The guest path stays for benches and for profiles created by the I4a build.',
     requires: { key: 'upload.enabled', equals: true },
     decides: 'ADR-008', readback: 'ironmemo.account.v1.kind',
   },

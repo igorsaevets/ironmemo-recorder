@@ -4,6 +4,7 @@ import { POPUP } from '../shared/strings.js';
 
 const $ = (id) => document.getElementById(id);
 let timerHandle = null;
+let uploadEnabled = true; // settings upload.enabled — the after-stop line is only offered when the feature is on
 
 // CWS Purple Nickel: prominent disclosure BEFORE first data collection. C7 in checklist.
 // Bumping the version key forces the overlay to reappear on the next popup open,
@@ -112,6 +113,12 @@ async function init() {
     chrome.tabs.create({ url: chrome.runtime.getURL('src/session-list/session-list.html') }));
   $('openPermission').addEventListener('click', () =>
     chrome.runtime.sendMessage({ target: 'background', type: 'OPEN_PERMISSION' }));
+  // I4b task 4: the Recordings page opens scrolled to the session that just stopped (no upload from here)
+  $('transcribeLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    const sid = $('transcribeLink').dataset.sid;
+    if (sid) chrome.tabs.create({ url: chrome.runtime.getURL(`src/session-list/session-list.html#sid=${encodeURIComponent(sid)}`) });
+  });
 
   // Состояние живёт в storage, а не в popup: popup закрывается, запись — нет.
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -121,6 +128,7 @@ async function init() {
 
 async function renderConfig() {
   const v = await loadSettings();
+  uploadEnabled = getByPath(v, 'upload.enabled') !== false;
   const modeLabel = { mic: 'microphone', tab: 'tab audio',
                       'mic+tab': 'microphone + tab' }[getByPath(v, 'source.mode')];
   const parts = [];
@@ -168,6 +176,15 @@ async function refresh() {
   $('start').disabled = $('pause').disabled = $('stop').disabled = false;
 
   if (rec) startWave(); else stopWave();
+
+  // I4b task 4: one line for the recording that just stopped — until the next recording starts
+  const stopped = s.status === 'idle' && s.lastStopped?.sessionId && uploadEnabled ? s.lastStopped : null;
+  $('afterStop').hidden = !stopped;
+  if (stopped) {
+    $('transcribeLink').textContent = POPUP.transcribeLine;
+    $('transcribeLink').dataset.sid = stopped.sessionId;
+    $('afterStopHint').textContent = POPUP.transcribeHint;
+  }
 
   if (s.error) showError(s.error); else { $('err').hidden = true; $('errActions').hidden = true; }
   // Warnings while recording (device lost/returned, tab capture ended) do not change the

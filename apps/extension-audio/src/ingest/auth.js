@@ -3,8 +3,9 @@
  *
  * Storage layout (why: CODEX.md Q1 — the refresh credential persists, the access one does not):
  *   chrome.storage.local   ironmemo.account.v1  {kind:'guest'|'user', apiOrigin, refresh, device_id,
- *                                                user:{id,is_anonymous,auth_type}, obtained_at, rotated_at,
- *                                                lost:{at,status}|null}
+ *                                                user:{id,is_anonymous,auth_type,emailMasked,is_email_verified},
+ *                                                status, via:'guest'|'email', obtained_at, rotated_at, claimedAt,
+ *                                                previousUserId, lost:{at,status}|null} — the e-mail is kept MASKED only
  *   chrome.storage.local   ironmemo.device.v1   {device_id} — survives logout, like the web app's
  *                                                device repo (auth-storage.ts: anti-abuse continuity)
  *   chrome.storage.session ironmemo.access.v1   {access, apiOrigin, userId, obtained_at}
@@ -22,7 +23,8 @@
  * Never logged: any credential value. Only lengths and ids.
  */
 
-import { PATHS, ApiError, TransportError, AuthLostError } from './api.js';
+import { PATHS, ApiError, TransportError, AuthLostError, clientTag } from './api.js';
+import { maskEmail } from './claim.js';
 
 export const ACCOUNT_KEY = 'ironmemo.account.v1';
 export const ACCESS_KEY = 'ironmemo.access.v1';
@@ -56,7 +58,7 @@ function validPair(p) {
   return !!p && typeof p.access === 'string' && p.access.length > 20 && typeof p.refresh === 'string' && p.refresh.length > 20;
 }
 
-const PLAIN_HEADERS = { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
+const PLAIN_HEADERS = { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'X-IronMemo-Client': clientTag() };
 
 export function createAuth({ apiOrigin, log = () => {} }) {
   const pageId = crypto.randomUUID();
@@ -97,6 +99,10 @@ export function createAuth({ apiOrigin, log = () => {} }) {
       isAnonymous: acc?.user?.is_anonymous ?? null,
       lost: acc?.lost ?? null,
       obtainedAt: acc?.obtained_at ?? null,
+      emailMasked: acc?.user?.emailMasked ?? null,
+      via: acc?.via ?? null,
+      claimedAt: acc?.claimedAt ?? null,
+      previousUserId: acc?.previousUserId ?? null,
     };
   }
 
@@ -130,12 +136,36 @@ export function createAuth({ apiOrigin, log = () => {} }) {
     const acc = {
       kind: data.user?.is_anonymous === false ? 'user' : 'guest',
       apiOrigin, refresh: data.tokens.refresh, device_id,
-      user: { id: data.user?.id ?? null, is_anonymous: data.user?.is_anonymous ?? true, auth_type: data.user?.auth_type ?? null },
-      status: data.status ?? null, obtained_at: Date.now(), rotated_at: null, lost: null,
+      user: { id: data.user?.id ?? null, is_anonymous: data.user?.is_anonymous ?? true, auth_type: data.user?.auth_type ?? null, emailMasked: null, is_email_verified: false },
+      status: data.status ?? null, via: 'guest', obtained_at: Date.now(), rotated_at: null, claimedAt: null, previousUserId: null, lost: null,
     };
     await saveAccount(acc);
     await saveAccess({ access: data.tokens.access, apiOrigin, userId: acc.user.id, obtained_at: Date.now() });
     log('auth.guest_created', { userId: acc.user.id, status: acc.status, accessLength: data.tokens.access.length, refreshLength: data.tokens.refresh.length });
+    return acc;
+  }
+
+  /**
+   * The e-mail claim answered with a token pair (AuthResponse): it replaces the stored account —
+   * REGISTERED upgrades the guest in place (same id), MERGED / LOGGED_IN switch to the existing
+   * account (new id; `previousUserId` remembers the guest whose rows are being carried across).
+   * The e-mail is stored MASKED only; the full address is never written or logged.
+   */
+  async function adoptSession(data, { via = 'email', emailMasked = null } = {}) {
+    await hardenStorage();
+    if (!validPair(data?.tokens)) throw new ApiError({ status: 200, message: 'verify: missing token pair', path: PATHS.emailVerify });
+    const device_id = await deviceId();
+    const prev = await loadAccount();
+    const u = data.user ?? {};
+    const acc = {
+      kind: u.is_anonymous === true ? 'guest' : 'user', apiOrigin, refresh: data.tokens.refresh, device_id,
+      user: { id: u.id ?? null, is_anonymous: u.is_anonymous ?? false, auth_type: u.auth_type ?? via, emailMasked: emailMasked ?? maskEmail(u.email) ?? null, is_email_verified: u.is_email_verified ?? null },
+      status: data.status ?? null, via, obtained_at: Date.now(), rotated_at: null, claimedAt: Date.now(),
+      previousUserId: prev?.user?.id && prev.user.id !== u.id ? prev.user.id : null, lost: null,
+    };
+    await saveAccount(acc);
+    await saveAccess({ access: data.tokens.access, apiOrigin, userId: acc.user.id, obtained_at: Date.now() });
+    log('auth.session_adopted', { via, status: acc.status, kind: acc.kind, userId: acc.user.id, previousUserId: acc.previousUserId, accessLength: data.tokens.access.length, refreshLength: data.tokens.refresh.length });
     return acc;
   }
 
@@ -206,5 +236,5 @@ export function createAuth({ apiOrigin, log = () => {} }) {
   /** Test hook (bench only): forget the in-memory access value so the next call re-reads storage. */
   function _resetMemory() { memAccess = null; }
 
-  return { pageId, status, ensureSession, getAccess, refresh, logout, loadAccount, hardenStorage, _resetMemory };
+  return { pageId, status, ensureSession, getAccess, refresh, logout, loadAccount, hardenStorage, deviceId, adoptSession, _resetMemory };
 }
