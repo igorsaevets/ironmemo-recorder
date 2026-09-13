@@ -1,10 +1,10 @@
 {
   "extensionName": {
-    "message": "IronMemo Audio Recorder",
+    "message": "IronMemo: Free Audio Recorder & Transcribe Meetings & AI Notetaker",
     "description": "Extension name shown in Chrome and the Chrome Web Store."
   },
   "extensionDescription": {
-    "message": "Records microphone and tab audio locally in your browser. Keeps recording when the tab is closed. Decodes the file after a Chrome crash.",
+    "message": "Free local audio recorder for meetings and calls. Records mic + tab audio. Transcription and AI notes coming next.",
     "description": "Short store description, 132 characters or fewer."
   },
   "actionTitle": {

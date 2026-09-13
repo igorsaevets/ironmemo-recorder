@@ -93,19 +93,19 @@ async function init() {
 
 async function renderConfig() {
   const v = await loadSettings();
-  const modeLabel = { mic: 'микрофон', tab: 'звук вкладки',
-                      'mic+tab': 'микрофон + вкладка' }[getByPath(v, 'source.mode')];
+  const modeLabel = { mic: 'microphone', tab: 'tab audio',
+                      'mic+tab': 'microphone + tab' }[getByPath(v, 'source.mode')];
   const parts = [];
-  if (getByPath(v, 'source.keepSeparate')) parts.push('раздельно');
-  if (getByPath(v, 'source.produceMix')) parts.push('+ микс');
+  if (getByPath(v, 'source.keepSeparate')) parts.push('separate');
+  if (getByPath(v, 'source.produceMix')) parts.push('+ mix');
 
   $('config').innerHTML =
-    `<div>Источник: <b>${modeLabel}</b> ${parts.join(' ')}</div>` +
-    `<div>Кодек: <b>${getByPath(v, 'audioEnc.codec')}</b> / ${getByPath(v, 'audioEnc.container')}, `
-    + `<b>${getByPath(v, 'audioEnc.bitrateKbps')} кбит/с</b></div>` +
-    `<div>Сегменты: <b>${getByPath(v, 'storage.segmentStrategy')}</b></div>` +
-    `<div>Оценка объёма: <b>${estimateMBPerHour(v)} МБ/ч</b></div>` +
-    `<div>Профиль: <b>${getByPath(v, 'experiment.profileId')}</b></div>`;
+    `<div>Source: <b>${modeLabel}</b> ${parts.join(' ')}</div>` +
+    `<div>Codec: <b>${getByPath(v, 'audioEnc.codec')}</b> / ${getByPath(v, 'audioEnc.container')}, `
+    + `<b>${getByPath(v, 'audioEnc.bitrateKbps')} kbps</b></div>` +
+    `<div>Segments: <b>${getByPath(v, 'storage.segmentStrategy')}</b></div>` +
+    `<div>Est. size: <b>${estimateMBPerHour(v)} MB/h</b></div>` +
+    `<div>Profile: <b>${getByPath(v, 'experiment.profileId')}</b></div>`;
 }
 
 async function state() {
@@ -117,7 +117,7 @@ async function send(type, extra = {}) {
   $('start').disabled = $('pause').disabled = $('stop').disabled = true;
   const r = await chrome.runtime.sendMessage({ target: 'background', type, ...extra })
     .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-  if (!r?.ok) showError(r?.error ?? 'Неизвестная ошибка');
+  if (!r?.ok) showError(r?.error ?? 'Unknown error');
   await refresh();
 }
 
@@ -128,15 +128,15 @@ async function refresh() {
 
   $('stateDot').className = `dot ${s.status}`;
   $('stateText').textContent = {
-    idle: 'Готов к записи', starting: 'Запуск…', recording: 'Идёт запись',
-    paused: 'Пауза', error: 'Ошибка',
-    awaiting_perm: 'Ждём разрешение микрофона (см. открытую вкладку)',
+    idle: 'Ready to record', starting: 'Starting…', recording: 'Recording',
+    paused: 'Paused', error: 'Error',
+    awaiting_perm: 'Waiting for microphone permission (see the open tab)',
   }[s.status] ?? s.status;
 
   $('start').hidden = rec || paused || awaitingPerm;
   $('pause').hidden = !(rec || paused);
   $('stop').hidden  = !(rec || paused);
-  $('pause').textContent = paused ? 'Продолжить' : 'Пауза';
+  $('pause').textContent = paused ? 'Resume' : 'Pause';
   $('start').disabled = $('pause').disabled = $('stop').disabled = false;
 
   if (rec) startWave(); else stopWave();
@@ -160,7 +160,7 @@ async function refresh() {
   const stale = rec && s.progressAt && Date.now() - s.progressAt > 20_000;
   if (stale && !warn) {
     $('warn').hidden = false;
-    $('warn').textContent = `Нет данных от записи ${Math.round((Date.now() - s.progressAt) / 1000)} с. Если это продолжается — остановите и запустите запись заново.`;
+    $('warn').textContent = `No data from the recording for ${Math.round((Date.now() - s.progressAt) / 1000)} s. If this continues — stop and start recording again.`;
   }
 
   clearInterval(timerHandle);
@@ -182,19 +182,19 @@ async function refresh() {
  * seconds on disk per role and whether the file decodes end to end. No promise beyond that.
  */
 function orphanText(o) {
-  const when = o.startedAt ? new Date(o.startedAt).toLocaleString('ru-RU') : '—';
+  const when = o.startedAt ? new Date(o.startedAt).toLocaleString('en-US') : '—';
   const r = o.recovery;
-  if (!r) return `Запись от ${when} была прервана без остановки. Файлы лежат в хранилище браузера; проверка ещё не выполнялась.`;
-  if (!r.ok && r.error) return `Запись от ${when} была прервана. Проверка файлов не удалась: ${r.error}`;
-  if (r.skipped) return `Запись от ${when}: ${r.skipped}.`;
-  const fmt = (sec) => { const s = Math.round(sec); return `${Math.floor(s / 60)} мин ${String(s % 60).padStart(2, '0')} с`; };
+  if (!r) return `Recording from ${when} was interrupted without stop. Files are in browser storage; verification not yet run.`;
+  if (!r.ok && r.error) return `Recording from ${when} was interrupted. File verification failed: ${r.error}`;
+  if (r.skipped) return `Recording from ${when}: ${r.skipped}.`;
+  const fmt = (sec) => { const s = Math.round(sec); return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`; };
   const parts = Object.entries(r.roles ?? {}).map(([role, x]) => {
-    const name = { local_mic: 'микрофон', remote_tab: 'вкладка', compatibility_mix: 'микс' }[role] ?? role;
+    const name = { local_mic: 'microphone', remote_tab: 'tab', compatibility_mix: 'mix' }[role] ?? role;
     const sec = x.secondsDecoded ?? x.secondsOnDisk;
-    return `${name} — ${fmt(sec)}${x.decodesFully === true ? ', декодируется целиком' : x.decodesFully === false ? ', ДЕКОДИРУЕТСЯ НЕ ЦЕЛИКОМ' : ''}`;
+    return `${name} — ${fmt(sec)}${x.decodesFully === true ? ', decodes fully' : x.decodesFully === false ? ', DOES NOT DECODE FULLY' : ''}`;
   });
-  return `Запись от ${when} была прервана без остановки. На диске: ${parts.join('; ')}. `
-       + `Проверка заняла ${(r.ms / 1000).toFixed(1)} с. Откройте страницу «Записи» ниже, чтобы скачать восстановленный файл.`;
+  return `Recording from ${when} was interrupted without stop. On disk: ${parts.join('; ')}. `
+       + `Verification took ${(r.ms / 1000).toFixed(1)} s. Open the Recordings page below to download the recovered file.`;
 }
 
 async function startWave() {
@@ -261,6 +261,6 @@ function showError(msg) {
   $('err').hidden = false;
   $('err').textContent = msg;
   // Ошибка связана с микрофоном — предложить открыть страницу разрешения одним кликом.
-  const isMicIssue = /микрофон|Permission|разрешен/i.test(msg);
+  const isMicIssue = /microphone|Permission|permission|denied|dismissed/i.test(msg);
   $('errActions').hidden = !isMicIssue;
 }

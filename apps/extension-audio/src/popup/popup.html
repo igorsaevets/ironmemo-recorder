@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <link rel="stylesheet" href="popup.css">
@@ -7,23 +7,17 @@
 <body>
   <div id="consent" class="consent" hidden>
     <div class="consent-scroll">
-      <h2>О расширении IronMemo</h2>
-      <p>IronMemo записывает звук микрофона и вкладок <b>локально в вашем браузере</b>. Файлы хранятся в браузерном хранилище (OPFS) на этом устройстве, пока вы не удалите их на странице «Записи». IronMemo ничего не отправляет на сервер без вашего явного запроса. Расширение не читает текст страниц, пароли или историю — только тот звук, который вы выбираете захватить. Расширение не использует ИИ на ваших записях без вашего отдельного разрешения.</p>
-      <p>Категории данных: голос микрофона (Personal communications), звук вкладки (Website content).</p>
-      <p>Начиная запись, вы подтверждаете, что имеете право записывать всех участников встречи в вашей юрисдикции.</p>
-      <details class="en" open>
-        <summary>English version</summary>
-        <p>IronMemo records microphone and tab audio <b>locally in your browser</b>. Files stay in the browser's storage (OPFS) on this device until you delete them from the «Записи» page. IronMemo does not send anything to a server without your explicit request. The extension does not read page text, passwords or history — only the audio you choose to capture. It does not run AI on your recordings without your separate permission.</p>
-        <p>Data categories: microphone voice (Personal communications), tab audio (Website content).</p>
-        <p>By starting a recording, you confirm you have the right to record all meeting participants under the law of your jurisdiction.</p>
-      </details>
+      <h2>About IronMemo</h2>
+      <p>IronMemo records microphone and tab audio <b>locally in your browser</b>. Files stay in the browser's storage (OPFS) on this device until you delete them from the Recordings page. IronMemo does not send anything to a server without your explicit request. The extension does not read page text, passwords or history — only the audio you choose to capture. It does not run AI on your recordings without your separate permission.</p>
+      <p>Data categories: microphone voice (Personal communications), tab audio (Website content).</p>
+      <p>By starting a recording, you confirm you have the right to record all meeting participants under the law of your jurisdiction.</p>
     </div>
     <div class="consent-actions">
       <label class="check">
         <input type="checkbox" id="consentAgree">
-        <span>Я согласен и продолжаю</span>
+        <span>I agree and continue</span>
       </label>
-      <button id="consentContinue" class="btn primary" disabled>Продолжить</button>
+      <button id="consentContinue" class="btn primary" disabled>Continue</button>
       <a id="privacyLink" class="privacy" href="https://igorsaevets.github.io/ironmemo-recorder/privacy-policy.html" target="_blank" rel="noopener">Privacy Policy</a>
     </div>
   </div>
@@ -32,7 +26,7 @@
   <div class="head">
     <span class="dot" id="stateDot"></span>
     <div>
-      <strong id="stateText">Готов к записи</strong>
+      <strong id="stateText">Ready to record</strong>
       <div class="timer" id="timer">00:00:00</div>
     </div>
   </div>
@@ -42,23 +36,23 @@
   <canvas id="wave" class="wave" width="292" height="60" hidden></canvas>
 
   <div class="actions">
-    <button id="start" class="btn primary">Начать запись</button>
-    <button id="pause" class="btn" hidden>Пауза</button>
-    <button id="stop"  class="btn danger" hidden>Остановить</button>
+    <button id="start" class="btn primary">Start recording</button>
+    <button id="pause" class="btn" hidden>Pause</button>
+    <button id="stop"  class="btn danger" hidden>Stop</button>
   </div>
 
   <div class="err" id="err" hidden></div>
   <div class="err" id="warn" hidden style="opacity:.85"></div>
   <div id="errActions" hidden style="margin-top:8px;">
-    <button id="openPermission" class="btn tiny">Открыть страницу разрешения микрофона</button>
+    <button id="openPermission" class="btn tiny">Open microphone permission page</button>
   </div>
   <div class="orphan" id="orphan" hidden></div>
 
-  <button id="openSessions" class="btn wide">Записи</button>
+  <button id="openSessions" class="btn wide">Recordings</button>
 
   <div class="foot">
-    <a href="#" id="openOptions">Настройки</a>
-    <a href="#" id="openLab">Диагностика</a>
+    <a href="#" id="openOptions">Settings</a>
+    <a href="#" id="openLab">Diagnostics</a>
   </div>
   </div>
 

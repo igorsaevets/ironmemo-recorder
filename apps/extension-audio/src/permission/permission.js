@@ -26,7 +26,7 @@ $('grant').addEventListener('click', requestPermission);
 $('close').addEventListener('click', () => window.close());
 
 async function requestPermission() {
-  setStatus('Запрашиваю разрешение…', 'muted');
+  setStatus('Requesting permission…', 'muted');
   $('grant').disabled = true;
 
   try {
@@ -35,7 +35,7 @@ async function requestPermission() {
 
     await chrome.storage.local.set({ [STATE_KEY]: { granted: true, at: Date.now() } });
 
-    setStatus('Разрешение получено. Вкладку можно закрыть — запись теперь работает во всех сессиях.', 'ok');
+    setStatus('Permission granted. You can close this tab — recording will now work across all sessions.', 'ok');
     $('close').hidden = false;
     $('grant').hidden = true;
 
@@ -57,15 +57,15 @@ async function requestPermission() {
     });
 
     if (name === 'NotAllowedError' && /dismiss/i.test(msg)) {
-      setStatus('Chrome «съел» запрос без диалога. Это MV3-баг. См. инструкцию ниже про '
-              + 'chrome://extensions → Настройки сайта → Микрофон.', 'warn');
+      setStatus('Chrome swallowed the prompt without a dialog. This is an MV3 quirk. See the instructions below '
+              + 'for chrome://extensions → Site settings → Microphone.', 'warn');
     } else if (name === 'NotAllowedError') {
-      setStatus('Разрешение отклонено. Можно повторить попытку или разрешить вручную '
-              + 'через chrome://extensions (инструкция ниже).', 'err');
+      setStatus('Permission denied. You can try again or grant it manually via chrome://extensions '
+              + '(instructions below).', 'err');
     } else if (name === 'NotFoundError') {
-      setStatus('В системе не найдено микрофонов. Подключите устройство и повторите.', 'err');
+      setStatus('No microphones found in the system. Plug a device in and try again.', 'err');
     } else {
-      setStatus(`Ошибка: ${name}: ${msg}`, 'err');
+      setStatus(`Error: ${name}: ${msg}`, 'err');
     }
 
     try {

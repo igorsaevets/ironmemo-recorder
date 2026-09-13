@@ -1,10 +1,10 @@
 {
   "extensionName": {
-    "message": "IronMemo Audio Recorder",
+    "message": "IronMemo: Бесплатный диктофон, транскрибация встреч и AI Notetaker",
     "description": "Название расширения в Chrome и Chrome Web Store."
   },
   "extensionDescription": {
-    "message": "Локальная запись микрофона и звука вкладки для встреч и звонков. Работает при закрытой вкладке. Декодирует файл после сбоев Chrome.",
+    "message": "Бесплатный локальный диктофон для встреч и звонков. Микрофон + звук вкладки. Транскрибация и AI-заметки скоро.",
     "description": "Короткое описание для магазина, до 132 символов."
   },
   "actionTitle": {

@@ -14,9 +14,9 @@ const $ = (id) => document.getElementById(id);
 const ROLES = ['compatibility_mix', 'local_mic', 'remote_tab']; // longest-first for prefix matching
 
 const ROLE_LABEL = {
-  local_mic: 'Микрофон',
-  remote_tab: 'Вкладка',
-  compatibility_mix: 'Микс (mic+tab)',
+  local_mic: 'Microphone',
+  remote_tab: 'Tab',
+  compatibility_mix: 'Mix (mic+tab)',
 };
 
 // Latin slug in downloaded filenames. Cyrillic in Windows Downloads
@@ -30,7 +30,7 @@ const ROLE_SLUG = {
 // Opus @ 48 kbps ≈ 6 kB/s per role → used only as a last-resort duration fallback.
 const BYTES_PER_SEC_PER_ROLE = 6000;
 
-boot().catch((e) => showStatus(`Не удалось загрузить список: ${e?.message ?? e}`, 'error'));
+boot().catch((e) => showStatus(`Failed to load the list: ${e?.message ?? e}`, 'error'));
 
 async function boot() {
   $('refresh').addEventListener('click', () => refresh().catch((e) => showStatus(e.message, 'error')));
@@ -176,21 +176,21 @@ function renderSession(s) {
   const dateStr = date ? formatDate(date) : '—';
   const duration = s.durationSec != null ? formatDuration(s.durationSec) : '—';
   const badge = s.status === 'ok'
-    ? '<span class="pill ok">Завершена штатно</span>'
-    : '<span class="pill orphan">Прервана без остановки</span>';
+    ? '<span class="pill ok">Completed</span>'
+    : '<span class="pill orphan">Interrupted without stop</span>';
   const engineTag = s.engine ? `<span class="tag">${escapeHtml(s.engine)}</span>` : '';
 
   el.innerHTML = `
     <div class="session-head">
       <div>
         <div class="session-date">${dateStr}${badge}${engineTag}</div>
-        <div class="session-meta">Длительность: ${duration} · На диске: ${formatBytes(s.bytes)}</div>
+        <div class="session-meta">Duration: ${duration} · On disk: ${formatBytes(s.bytes)}</div>
       </div>
       <div class="session-id">${s.sid.slice(0, 8)}…</div>
     </div>
     <div class="roles"></div>
     <div class="session-actions">
-      <button class="btn danger" data-action="delete">Удалить сессию</button>
+      <button class="btn danger" data-action="delete">Delete session</button>
     </div>
   `;
 
@@ -203,14 +203,14 @@ function renderSession(s) {
   }
   if (!anyRole) {
     const files = s.files.map((f) => `${escapeHtml(f.name)} (${formatBytes(f.size)})`).join(', ');
-    rolesEl.innerHTML = `<div class="session-meta" style="padding:8px 4px">Роль-файлы не найдены. Все файлы в сессии: ${files || '(пусто)'}.</div>`;
+    rolesEl.innerHTML = `<div class="session-meta" style="padding:8px 4px">No role files found. All files in the session: ${files || '(empty)'}.</div>`;
   }
   if (s.otherFiles.length) {
     const rest = s.otherFiles.map((f) => `${escapeHtml(f.name)} (${formatBytes(f.size)})`).join(', ');
     const note = document.createElement('div');
     note.className = 'session-meta';
     note.style.padding = '4px';
-    note.textContent = `Прочие файлы: ${rest}`;
+    note.textContent = `Other files: ${rest}`;
     rolesEl.appendChild(note);
   }
 
@@ -238,7 +238,7 @@ function renderRoleRow(role, g) {
       <div class="role-name">${escapeHtml(label)}</div>
       <div class="role-size">${formatBytes(f.size)}</div>
       <div class="role-actions">
-        <button class="btn" data-action="download-file" data-role="${role}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">Скачать</button>
+        <button class="btn" data-action="download-file" data-role="${role}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">Download</button>
       </div>
     `;
     return row;
@@ -248,10 +248,10 @@ function renderRoleRow(role, g) {
     const f = g.recovered[0];
     const ext = f.name.match(/\.(opus|webm)$/)?.[1] ?? 'opus';
     row.innerHTML = `
-      <div class="role-name">${escapeHtml(label)} <span class="tag warn">восстановлено</span></div>
+      <div class="role-name">${escapeHtml(label)} <span class="tag warn">recovered</span></div>
       <div class="role-size">${formatBytes(f.size)}</div>
       <div class="role-actions">
-        <button class="btn" data-action="download-file" data-role="${role}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">Скачать</button>
+        <button class="btn" data-action="download-file" data-role="${role}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">Download</button>
       </div>
     `;
     return row;
@@ -271,15 +271,15 @@ function renderRoleRow(role, g) {
   const segments = [...bySegment.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   const totalBytes = g.parts.reduce((a, f) => a + f.size, 0);
   const segNote = segments.length > 1
-    ? ` <span class="tag warn">${segments.length} сегм. × скачать по одному</span>`
+    ? ` <span class="tag warn">${segments.length} segments × download individually</span>`
     : '';
   const buttons = segments.map(([seg, parts]) => {
     const sz = parts.reduce((a, f) => a + f.size, 0);
     const suffix = segments.length > 1 ? ` #${seg}` : '';
-    return `<button class="btn" data-action="download-parts" data-role="${role}" data-segment="${seg}">Скачать${suffix} (${formatBytes(sz)})</button>`;
+    return `<button class="btn" data-action="download-parts" data-role="${role}" data-segment="${seg}">Download${suffix} (${formatBytes(sz)})</button>`;
   }).join(' ');
   row.innerHTML = `
-    <div class="role-name">${escapeHtml(label)} <span class="tag warn">${g.parts.length} фраг.</span>${segNote}</div>
+    <div class="role-name">${escapeHtml(label)} <span class="tag warn">${g.parts.length} chunks</span>${segNote}</div>
     <div class="role-size">${formatBytes(totalBytes)}</div>
     <div class="role-actions">${buttons}</div>
   `;
@@ -295,14 +295,14 @@ async function handleAction(e, session, sessionEl) {
     const file = btn.dataset.file;
     const roleKey = btn.dataset.role;
     const ext = btn.dataset.ext;
-    btn.disabled = true; btn.textContent = 'Скачивание…';
+    btn.disabled = true; btn.textContent = 'Downloading…';
     try {
       await downloadFile(session.sid, file, roleKey, ext, session.startedAt);
-      btn.textContent = 'Готово';
-      setTimeout(() => { btn.disabled = false; btn.textContent = 'Скачать'; }, 1200);
+      btn.textContent = 'Done';
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Download'; }, 1200);
     } catch (err) {
-      showStatus(`Скачивание не удалось: ${err.message ?? err}`, 'error');
-      btn.disabled = false; btn.textContent = 'Скачать';
+      showStatus(`Download failed: ${err.message ?? err}`, 'error');
+      btn.disabled = false; btn.textContent = 'Download';
     }
     return;
   }
@@ -315,32 +315,32 @@ async function handleAction(e, session, sessionEl) {
       return (m ? m[1] : '000') === segment;
     });
     const original = btn.textContent;
-    btn.disabled = true; btn.textContent = 'Сборка…';
+    btn.disabled = true; btn.textContent = 'Assembling…';
     try {
       await downloadParts(session.sid, roleKey, segment, parts, session.startedAt);
-      btn.textContent = 'Готово';
+      btn.textContent = 'Done';
       setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1200);
     } catch (err) {
-      showStatus(`Сборка не удалась: ${err.message ?? err}`, 'error');
+      showStatus(`Assembly failed: ${err.message ?? err}`, 'error');
       btn.disabled = false; btn.textContent = original;
     }
     return;
   }
 
   if (action === 'delete') {
-    if (!confirm(`Удалить сессию от ${sessionEl.querySelector('.session-date').textContent.replace(/Завершена штатно|Прервана без остановки/, '').trim()}? Файлы нельзя будет восстановить.`)) return;
-    btn.disabled = true; btn.textContent = 'Удаление…';
+    if (!confirm(`Delete session from ${sessionEl.querySelector('.session-date').textContent.replace(/Completed|Interrupted without stop/, '').trim()}? Files cannot be recovered.`)) return;
+    btn.disabled = true; btn.textContent = 'Deleting…';
     try {
       await deleteSession(session.sid);
       sessionEl.remove();
       const remaining = document.querySelectorAll('#list .session').length;
       $('totalCount').textContent = remaining;
       if (!remaining) $('empty').hidden = false;
-      showStatus('Сессия удалена.', 'ok');
+      showStatus('Session deleted.', 'ok');
       setTimeout(() => $('status').hidden = true, 2500);
     } catch (err) {
-      showStatus(`Удаление не удалось: ${err.message ?? err}`, 'error');
-      btn.disabled = false; btn.textContent = 'Удалить сессию';
+      showStatus(`Delete failed: ${err.message ?? err}`, 'error');
+      btn.disabled = false; btn.textContent = 'Delete session';
     }
   }
 }
@@ -405,12 +405,12 @@ async function deleteSession(sid) {
 // ─────────────────────────────────────────────────────────── format helpers ──
 
 function formatBytes(n) {
-  if (!n) return '0 Б';
+  if (!n) return '0 B';
   const kb = n / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} КБ`;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
   const mb = kb / 1024;
-  if (mb < 1024) return `${mb.toFixed(1)} МБ`;
-  return `${(mb / 1024).toFixed(2)} ГБ`;
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  return `${(mb / 1024).toFixed(2)} GB`;
 }
 
 function formatDuration(sec) {
@@ -418,13 +418,13 @@ function formatDuration(sec) {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const ss = s % 60;
-  if (h) return `${h} ч ${String(m).padStart(2, '0')} мин ${String(ss).padStart(2, '0')} с`;
-  if (m) return `${m} мин ${String(ss).padStart(2, '0')} с`;
-  return `${ss} с`;
+  if (h) return `${h} h ${String(m).padStart(2, '0')} m ${String(ss).padStart(2, '0')} s`;
+  if (m) return `${m} m ${String(ss).padStart(2, '0')} s`;
+  return `${ss} s`;
 }
 
 function formatDate(d) {
-  return d.toLocaleString('ru-RU', {
+  return d.toLocaleString('en-US', {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   });
