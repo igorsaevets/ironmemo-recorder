@@ -135,14 +135,17 @@ export function createClaim({ api, auth, log = () => {} }) {
       } else throw rethrow(e, 'request');
     }
     const prev = await load();
+    // ALWAYS our own mask: production's OtpSentResponse.target came back UNMASKED (measured 2026-09-13, the docs
+    // promise «u***@example.com») — the masked form is what the UI shows and what the account record keeps.
+    const serverTargetMasked = typeof res?.target === 'string' ? res.target !== clean : null;
     const pending = {
-      email: clean, target: typeof res?.target === 'string' && res.target ? res.target : maskEmail(clean),
+      email: clean, target: maskEmail(clean),
       requestedAt: Date.now(), requests: (prev?.email === clean ? (prev.requests ?? 0) : 0) + 1,
       cooldownSeconds: c.resendCooldownSeconds, ttlSeconds: c.ttlSeconds, codeLength: c.codeLength,
       attemptsRemaining: null, lockedUntil: null, withGuest, guestUserId: hadGuest ? st.userId : null, lastError: null,
     };
     await save(pending);
-    log('claim.code_requested', { withGuest, resend, requests: pending.requests, cooldown: c.resendCooldownSeconds });
+    log('claim.code_requested', { withGuest, resend, requests: pending.requests, cooldown: c.resendCooldownSeconds, serverTargetMasked });
     return pending;
   }
 
