@@ -131,10 +131,19 @@ export function createApi({ baseUrl, auth, log = () => {} }) {
     }
     log('api.ok', { method, path: templ(path), status: res.status, ms });
     if (res.status === 204) return null;
-    const text = await res.text();
-    if (!text) return null;
+    // A 2xx whose body is cut off (headers arrived, connection died) is an UNKNOWN outcome,
+    // exactly like a request without any answer: the server may have acted (measured in the
+    // bench, run 8: a truncated 201 on create was classified as a plain error and a Retry
+    // created a duplicate). TransportError sends the caller down the reconciliation path.
+    let text;
+    try { text = await res.text(); }
+    catch (e) {
+      log('api.body_cut_off', { method, path: templ(path), status: res.status });
+      throw new TransportError(`Answer from ${origin} was cut off (${e?.message ?? e})`, { cause: e, path });
+    }
+    if (!text) return res.ok && method !== 'GET' ? (() => { throw new TransportError(`Empty ${res.status} answer from ${origin}`, { path }); })() : null;
     try { return JSON.parse(text); }
-    catch { throw new ApiError({ status: res.status, message: 'Response was not JSON', path }); }
+    catch { throw new TransportError(`Answer from ${origin} was not JSON (${res.status})`, { path }); }
   }
 
   return {
