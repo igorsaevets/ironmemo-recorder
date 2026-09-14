@@ -19,60 +19,127 @@
   a { color: #0969da; }
   @media (prefers-color-scheme: dark) { a { color: #4f7cff; } }
   hr { border: 0; border-top: 1px solid rgba(120,120,120,.3); margin: 32px 0; }
+  .box { border: 1px solid rgba(120,120,120,.3); border-radius: 8px; padding: 12px 18px; margin: 16px 0; background: rgba(120,120,120,.06); }
 </style>
 </head>
 <body>
 <h1>Privacy Policy — IronMemo Audio Recorder</h1>
-<p class="meta">Effective date: 9 September 2026 · <a href="./">Back to home</a></p>
+<p class="meta">Effective date: 13 September 2026 · Applies to extension v0.6.0 and later · <a href="./">Back to home</a></p>
 
-<p>IronMemo Audio Recorder ("the extension") is a Chrome extension that records microphone and browser tab audio on the user's own device. This policy explains exactly what data the extension handles and what it does <em>not</em> do.</p>
+<p>IronMemo Audio Recorder ("the extension") is a Chrome extension that records microphone and browser tab audio on the user's own device. Starting with v0.6.0, the extension can also send one recording at a time to IronMemo servers for transcription — always <em>after</em> a separate consent dialog and never automatically. This policy explains exactly what data the extension handles, what is optional, and what happens on the server if you choose to use it.</p>
+
+<div class="box">
+<p><strong>Summary.</strong> Audio recording is local. Transcription is optional and only starts when you click <em>Transcribe with IronMemo</em> on a specific recording. Nothing else is uploaded. IronMemo does not train models on your recordings.</p>
+</div>
 
 <h2>1. Data the extension handles</h2>
-<p>The extension handles three categories of data:</p>
 <ul>
-  <li><strong>Microphone audio</strong> — captured only during a recording that the user has explicitly started. Classified by the Chrome Web Store as <em>Personal communications</em>.</li>
-  <li><strong>Browser tab audio</strong> — captured only during a recording that the user has explicitly started, and only from the specific tab the user chose. Classified by the Chrome Web Store as <em>Website content</em>.</li>
-  <li><strong>Extension settings and consent state</strong> — small key/value pairs (recording preferences, consent version, timestamps) stored in <code>chrome.storage.local</code>. Classified as <em>Website content</em>.</li>
+  <li><strong>Microphone audio</strong> — captured only during a recording you have explicitly started. Chrome Web Store category: <em>Personal communications</em>.</li>
+  <li><strong>Browser tab audio</strong> — captured only during a recording you have explicitly started, and only from the specific tab you chose. Category: <em>Website content</em>.</li>
+  <li><strong>Extension settings and consent state</strong> — small key/value pairs stored in <code>chrome.storage.local</code>: recording preferences, cloud-consent version, timestamps, and (after v0.6.0) IronMemo authentication tokens. Category: <em>Website content</em>.</li>
+  <li><strong>Your e-mail address</strong> — only when you enter it in the <em>Add your e-mail</em> dialog. Used as the login of your IronMemo account and to deliver a one-time verification code. Categories: <em>Authentication information</em> and <em>Personally identifiable information</em>.</li>
+  <li><strong>IronMemo authentication tokens</strong> — issued by IronMemo servers to your extension after a guest session or e-mail verification. Category: <em>Authentication information</em>.</li>
+  <li><strong>Diagnostic counters</strong> — how many errors of each kind occurred in the extension. Kept in <code>chrome.storage.local</code>, never sent anywhere by the extension itself, and only exposed on your clipboard when you press <em>Copy diagnostics</em>. Contain no recording content, no e-mail, no identifiers.</li>
 </ul>
 
-<p>The extension does <strong>not</strong> handle any of the following: web browsing history, form input, passwords, personally identifying information beyond what the user chooses to speak into the microphone, location, health data, financial information, authentication credentials, or personal communications outside of the user-initiated recording.</p>
+<p>The extension does <strong>not</strong> handle any of the following: web browsing history, form input, passwords, location, health data, financial information, biometric identifiers, personal communications outside of the user-initiated recording, or the content of tabs beyond the audio you chose to capture.</p>
 
-<h2>2. Where the data is stored</h2>
-<p>All recorded audio and settings stay on the user's device. Recorded audio is written to the browser's Origin Private File System (OPFS), which is a private storage area for the extension's origin. Nothing is uploaded to any server, and the extension performs no network requests to any external service.</p>
+<h2>2. Where recordings are stored</h2>
+<p>All recorded audio and transcript files are written to the browser's Origin Private File System (OPFS) on your device. They stay in OPFS until <em>you</em> delete them. Uninstalling the extension deletes them all. The extension makes no automatic network request to any external service for a recording; the only outbound traffic ever originates from a Transcribe click you made.</p>
 
-<p>The extension's manifest declares no host permissions and makes no <code>fetch</code>, <code>XMLHttpRequest</code>, or <code>WebSocket</code> calls. This is enforceable from source: the repository at <a href="https://github.com/igorsaevets/ironmemo-recorder">github.com/igorsaevets/ironmemo-recorder</a> is public and auditable.</p>
+<h2>3. Optional upload to IronMemo</h2>
 
-<h2>3. Retention and deletion</h2>
-<p>Recordings remain in local storage until the user deletes them. Deletion is available from the "Записи" (Recordings) page in the extension: each recording has a "Удалить сессию" (Delete session) button. Uninstalling the extension deletes all recordings and all settings.</p>
+<p>Each recording carries a <em>Transcribe with IronMemo</em> button. Clicking it shows a separate consent dialog and, if you accept, uploads that one recording to IronMemo servers for transcription. The extension keeps the local copy at the same time — the upload is a copy, not a move.</p>
 
-<p>There is no server-side copy to retain or delete, because nothing is uploaded.</p>
-
-<h2>4. Sharing</h2>
-<p>The extension does not sell, transfer, or share any user data. There is no third-party service, no analytics provider, no advertising network, and no crash-reporting service. There is no way for the extension author or anyone else to access recordings on the user's device.</p>
-
-<h2>5. AI and model training</h2>
-<p>The extension does not use recordings for artificial-intelligence processing, training, transcription, summarization, or any related purpose. If a future version of the extension adds an AI feature, that feature will be opt-in and disclosed in the extension's consent screen before it is activated. The current version has no such feature.</p>
-
-<h2>6. Recording consent and user responsibility</h2>
-<p>The extension shows a consent screen on first use that summarizes what it does and what it does not do. By starting a recording, the user confirms that they have the right to record all participants in the meeting under the law of their jurisdiction. Recording laws differ substantially between countries and, within the United States, between states — the user is responsible for compliance with the law that applies to them.</p>
-
-<h2>7. Permissions used, and why</h2>
+<h3>What is sent</h3>
 <ul>
-  <li><code>tabCapture</code> — required to record audio from the tab the user selects.</li>
+  <li>The audio file of the recording you chose — either the microphone track, the tab-audio track, or the mix, depending on the recording.</li>
+  <li>The recording's title (its date and time only), source type (<em>meeting</em> or <em>dictaphone</em>), duration and size.</li>
+  <li>Your e-mail address, only when you enter it in the <em>Add your e-mail</em> dialog. IronMemo delivers a one-time code to it and uses it as the login of your account.</li>
+  <li>A device identifier generated locally by the extension for guest sessions.</li>
+  <li>An <code>X-IronMemo-Client: ironmemo-extension/&lt;version&gt;</code> HTTP header on every request, so IronMemo can distinguish traffic by extension version. No user data is placed in this header.</li>
+</ul>
+
+<h3>What is <em>not</em> sent</h3>
+<ul>
+  <li>Other recordings — only the one you clicked <em>Transcribe</em> on.</li>
+  <li>Page text, page URLs, browsing history, passwords, form data, or the content of tabs you did not choose to capture.</li>
+  <li>Location, contacts, calendar events, or any operating-system data.</li>
+</ul>
+
+<h3>Where it goes</h3>
+<p>The upload target is <code>app.ironmemo.com</code>. The extension holds this origin as an <em>optional</em> host permission: it is requested from Chrome only when you accept the cloud consent, and no host-permission warning is shown at install time.</p>
+
+<p>IronMemo performs the transcription itself and delegates the speech-to-text step to third-party sub-processors. As of September 2026 these are:</p>
+<ul>
+  <li><strong>ElevenLabs Scribe</strong> — used for most languages. Retention policy: <a href="https://elevenlabs.io/docs/eleven-api/resources/zero-retention-mode">elevenlabs.io/docs/eleven-api/resources/zero-retention-mode</a>.</li>
+  <li><strong>AssemblyAI</strong> — used as a wide-tail fallback (models <em>best</em> and <em>universal</em>). Retention policy: <a href="https://www.assemblyai.com/docs/faq/what-is-your-data-retention-policy">assemblyai.com/docs/faq/what-is-your-data-retention-policy</a>.</li>
+  <li><strong>GigaAM</strong> — used for Russian.</li>
+</ul>
+<p>The provider used for a given recording is recorded in the transcript metadata (<code>engine.asr_model_id</code>). This list is current as of the effective date shown at the top of this page; if it changes, this page is updated together with the extension update that changes it.</p>
+
+<h3>Retention on the server</h3>
+<ul>
+  <li>The audio file is kept on IronMemo so you can request a paid re-processing of a recording that hit the free cap. You can delete the server copy at any time from the extension's Recordings page — the local files stay on your device.</li>
+  <li>Transcripts and summaries are kept on IronMemo under your account until you delete them. Deleting the recording on the server deletes its transcript and summary together.</li>
+  <li>Guest sessions (uploads without an e-mail) expire after 7 days of inactivity. After that the extension can no longer open them. Add your e-mail (the <em>Add your e-mail</em> dialog) to convert a guest session into a durable account before expiry.</li>
+</ul>
+
+<h3>No model training</h3>
+<p>IronMemo does not use your recordings, transcripts, or summaries to train speech-to-text models, language models, or any other AI system. This is a policy commitment of IronMemo the service. The third-party sub-processors above operate under their own terms, linked in this section — check them if that is a decision you need to verify independently.</p>
+
+<h3>Cost</h3>
+<p>The extension is free to install and use for local recording. Transcription of the first 10 minutes is free — per account, granted once your e-mail is verified. Beyond that a recording is processed only if the account has IronMemo credits. There is no subscription and no monthly cap in addition to that one-time 10-minute grant.</p>
+
+<h2>4. Retention and deletion — full picture</h2>
+<ul>
+  <li><strong>Local recording and transcript files</strong> — kept in OPFS until you delete them from the Recordings page. Uninstalling the extension deletes them all.</li>
+  <li><strong>Server-side audio, transcripts, summaries</strong> — kept under your IronMemo account until you delete the recording on the server, or delete the account on <a href="https://app.ironmemo.com">app.ironmemo.com</a>.</li>
+  <li><strong>Extension settings and tokens</strong> — kept in <code>chrome.storage.local</code>. <em>Sign out</em> in the extension wipes the IronMemo tokens; other settings survive. Uninstalling the extension deletes all settings.</li>
+  <li><strong>Diagnostic counters</strong> — kept in <code>chrome.storage.local</code>. Never sent anywhere by the extension; exposed on the clipboard only when you press <em>Copy diagnostics</em>. Never contain a recording, an e-mail, or the content of a transcript.</li>
+</ul>
+
+<h2>5. Sharing</h2>
+<p>The extension does not sell, transfer, or share user data for advertising or profile-building. There is no analytics provider, no advertising network, and no crash-reporting service embedded in the extension itself.</p>
+
+<p>When you choose to Transcribe a recording, the audio file and its metadata are shared with IronMemo and its speech-to-text sub-processors listed in section 3, for the sole purpose of returning the transcript. No other third party receives them.</p>
+
+<h2>6. AI use</h2>
+<p>Local recording performs no AI processing. When you click <em>Transcribe with IronMemo</em>, the audio is converted into a text transcript by the speech-to-text sub-processors named in section 3, and IronMemo may produce a short AI-generated summary from that transcript on the server side. IronMemo does not train models on your recordings, transcripts, or summaries (see section 3).</p>
+
+<h2>7. Recording consent and user responsibility</h2>
+<p>The extension shows a consent screen in the popup on first use that summarizes what it does and what it does not do. When you first click <em>Transcribe</em>, a second, separate consent dialog explains what is uploaded, where, and to which sub-processors — you must accept it before any upload starts.</p>
+<p>By starting a recording, you confirm that you have the right to record all participants under the law of your jurisdiction. Recording laws differ between countries and, within the United States, between states — the user is responsible for compliance with the law that applies to them.</p>
+
+<h2>8. Permissions used, and why</h2>
+<ul>
+  <li><code>tabCapture</code> — required to record audio from the tab you select.</li>
   <li><code>offscreen</code> — required by Manifest V3 to hold the recording pipeline while the popup is closed.</li>
-  <li><code>storage</code> — required to save recording settings and consent state in <code>chrome.storage.local</code>.</li>
-  <li><code>unlimitedStorage</code> — required so long recordings are not truncated by Chrome's default quota (approximately 60 megabytes per hour of Opus 48 kbps audio; a full workday of recording exceeds the default quota).</li>
+  <li><code>storage</code> — required to save recording settings, consent state, and IronMemo tokens in <code>chrome.storage.local</code>.</li>
+  <li><code>unlimitedStorage</code> — required so long recordings are not truncated by Chrome's default quota (about 60 MB per hour of Opus 48 kbps audio; a full workday of recording exceeds the default quota).</li>
+  <li><code>optional_host_permissions: ["https://app.ironmemo.com/*"]</code> — requested only when you click <em>Transcribe</em> and accept the cloud consent. Denied or later revoked access means no upload; local recording continues to work.</li>
 </ul>
 
-<p>The extension declares no host permissions and no optional permissions. The full <code>manifest.json</code> is visible in the public repository linked above.</p>
+<p>The extension declares no static host permissions. The full <code>manifest.json</code> is visible in the public repository at <a href="https://github.com/igorsaevets/ironmemo-recorder">github.com/igorsaevets/ironmemo-recorder</a>.</p>
 
-<h2>8. Contact</h2>
+<h2>9. Your rights</h2>
+<p>You can at any time:</p>
+<ul>
+  <li>Delete a recording locally from the Recordings page.</li>
+  <li>Delete the server copy of a recording from the same page. Local files are kept.</li>
+  <li>Sign out of your IronMemo account in the extension. The server copies stay under your account until you delete them; your local files stay on your device.</li>
+  <li>Revoke <code>app.ironmemo.com</code> host permission from Chrome's extensions page. The extension pauses any in-flight upload and starts no new one.</li>
+  <li>Delete your IronMemo account on <a href="https://app.ironmemo.com">app.ironmemo.com</a>. That erases the server copies of your recordings, transcripts, and summaries.</li>
+  <li>Uninstall the extension. That deletes all local files, tokens and settings on your device; server copies remain on IronMemo under the same account until deleted separately.</li>
+</ul>
+
+<h2>10. Contact</h2>
 <p>Author: Igor Saevets. Email: <a href="mailto:igorsaevets@gmail.com">igorsaevets@gmail.com</a>. Issue tracker: <a href="https://github.com/igorsaevets/ironmemo-recorder/issues">github.com/igorsaevets/ironmemo-recorder/issues</a>.</p>
 
-<h2>9. Changes to this policy</h2>
-<p>If the extension's data-handling practices change, this page will be updated and the extension's consent screen will be shown again automatically, so that users must accept the new terms before continuing to record. The consent screen carries a version number that is incremented for exactly this purpose.</p>
+<h2>11. Changes to this policy</h2>
+<p>If the extension's data-handling practices change, this page is updated and, where the change is material, the extension's cloud-consent dialog is shown again automatically so that users must re-accept the new terms. The cloud-consent version is incremented whenever the text on that dialog changes.</p>
 
 <hr>
-<p class="meta">This policy is written in plain English on purpose. If any part of it is unclear, please open an issue on the repository and it will be revised.</p>
+<p class="meta">Written in plain English on purpose. If any part is unclear, please open an issue on the repository and it will be revised.</p>
 </body>
 </html>

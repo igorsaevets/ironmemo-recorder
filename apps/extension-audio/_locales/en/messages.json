@@ -4,7 +4,7 @@
     "description": "Extension name shown in Chrome and the Chrome Web Store."
   },
   "extensionDescription": {
-    "message": "Free local audio recorder for meetings and calls. Records mic + tab audio. Transcription and AI notes coming next.",
+    "message": "Free audio recorder + optional cloud transcription. 10 free minutes/account. Records mic + tab audio. No bot in the call.",
     "description": "Short store description, 132 characters or fewer."
   },
   "actionTitle": {
