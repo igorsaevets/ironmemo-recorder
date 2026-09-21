@@ -394,7 +394,7 @@ function setupLevelAnalysers() {
     }
   }
   if (!state.analysers.size) return;
-  const buf = new Float32Array(128);
+  const buf = new Float32Array(256);
   state.timers.push(setInterval(() => {
     if (!state.sessionId) return;
     try {

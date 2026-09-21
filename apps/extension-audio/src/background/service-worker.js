@@ -245,6 +245,7 @@ function translateError(raw) {
 }
 
 async function stopCapture() {
+  volatileLevels = null;
   const prev = await getState();
   const res = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'STOP' })
     .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
