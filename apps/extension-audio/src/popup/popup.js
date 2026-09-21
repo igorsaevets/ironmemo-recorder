@@ -19,10 +19,7 @@ const CONSENT_TEXT_ID = 'en-v4-cloud-note';
 const NOTICE_KEY = 'ironmemo.updateNotice.v1';
 const NOTICE_ID = 'cloud-option-2026-09';
 
-// Живая волна микрофона в popup, чтобы юзер видел «звук приходит» и не получил пустой
-// файл, если mic заблокирован драйвером/системой (Kaspersky, audiosrv hang, mute).
-// Второй getUserMedia в popup — Chrome шарит mic между контекстами одного origin.
-const WAVE = { stream: null, ctx: null, an: null, raf: 0, starting: false, err: null };
+let levelPoll = null;
 
 boot().catch((e) => console.error('[popup] boot failed', e));
 
@@ -175,7 +172,7 @@ async function refresh() {
   $('pause').textContent = paused ? 'Resume' : 'Pause';
   $('start').disabled = $('pause').disabled = $('stop').disabled = false;
 
-  if (rec) startWave(); else stopWave();
+  if (rec || paused) startLevelMeter(); else stopLevelMeter();
 
   // I4b task 4: one line for the recording that just stopped — until the next recording starts
   const stopped = s.status === 'idle' && s.lastStopped?.sessionId && uploadEnabled ? s.lastStopped : null;
@@ -242,64 +239,68 @@ function orphanText(o) {
        + `Verification took ${(r.ms / 1000).toFixed(1)} s. Open the Recordings page below to download the recovered file.`;
 }
 
-async function startWave() {
-  if (WAVE.stream || WAVE.starting || WAVE.err) return;
-  WAVE.starting = true;
-  try {
-    const settings = await loadSettings();
-    const mode = getByPath(settings, 'source.mode');
-    if (mode === 'tab') { WAVE.starting = false; return; }
-    const deviceId = getByPath(settings, 'audioProc.deviceId') || undefined;
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        deviceId: deviceId ? { exact: deviceId } : undefined,
-        echoCancellation: false, noiseSuppression: false, autoGainControl: false,
-      },
-      video: false,
-    });
-    const ctx = new AudioContext();
-    const src = ctx.createMediaStreamSource(stream);
-    const an = ctx.createAnalyser();
-    an.fftSize = 2048;
-    src.connect(an);
-    WAVE.stream = stream; WAVE.ctx = ctx; WAVE.an = an;
-    const canvas = $('wave');
-    canvas.hidden = false;
-    const c2d = canvas.getContext('2d');
-    const buf = new Uint8Array(an.fftSize);
-    const draw = () => {
-      if (!WAVE.stream) return;
-      an.getByteTimeDomainData(buf);
-      const W = canvas.width, H = canvas.height;
-      c2d.fillStyle = '#1d212a';
-      c2d.fillRect(0, 0, W, H);
-      c2d.lineWidth = 2;
-      c2d.strokeStyle = '#4f7cff';
-      c2d.beginPath();
-      for (let i = 0; i < buf.length; i++) {
-        const x = (i / buf.length) * W;
-        const y = (buf[i] / 255) * H;
-        i === 0 ? c2d.moveTo(x, y) : c2d.lineTo(x, y);
-      }
-      c2d.stroke();
-      WAVE.raf = requestAnimationFrame(draw);
-    };
-    WAVE.raf = requestAnimationFrame(draw);
-  } catch (e) {
-    WAVE.err = e?.name ?? String(e);
-  } finally {
-    WAVE.starting = false;
-  }
+function startLevelMeter() {
+  if (levelPoll) return;
+  const canvas = $('wave');
+  canvas.hidden = false;
+  const c2d = canvas.getContext('2d');
+  drawMeterText(c2d, canvas, POPUP.meterWaiting);
+  levelPoll = setInterval(async () => {
+    try {
+      const r = await chrome.runtime.sendMessage({ target: 'background', type: 'GET_LEVELS' });
+      if (r?.levels) drawLevels(c2d, canvas, r.levels);
+      else drawMeterText(c2d, canvas, POPUP.meterWaiting);
+    } catch { /* popup closing */ }
+  }, 100);
 }
 
-function stopWave() {
-  if (WAVE.raf) cancelAnimationFrame(WAVE.raf);
-  WAVE.raf = 0;
-  if (WAVE.stream) WAVE.stream.getTracks().forEach((t) => t.stop());
-  if (WAVE.ctx && WAVE.ctx.state !== 'closed') WAVE.ctx.close().catch(() => {});
-  WAVE.stream = WAVE.ctx = WAVE.an = null;
+function stopLevelMeter() {
+  if (levelPoll) { clearInterval(levelPoll); levelPoll = null; }
   const canvas = $('wave');
   if (canvas) canvas.hidden = true;
+}
+
+const METER_LABELS = { local_mic: POPUP.meterMic, remote_tab: POPUP.meterTab, compatibility_mix: POPUP.meterMix };
+
+function drawLevels(c2d, canvas, levels) {
+  const W = canvas.width, H = canvas.height;
+  c2d.fillStyle = '#1d212a';
+  c2d.fillRect(0, 0, W, H);
+  const roles = Object.entries(levels).filter(([r]) => r !== 'compatibility_mix');
+  if (!roles.length) { drawMeterText(c2d, canvas, POPUP.meterWaiting); return; }
+  const gap = 4, labelW = 32;
+  const barH = Math.min(22, Math.floor((H - gap * (roles.length + 1)) / roles.length));
+  const totalH = roles.length * barH + (roles.length - 1) * gap;
+  const y0 = Math.floor((H - totalH) / 2);
+  roles.forEach(([role, peak], i) => {
+    const y = y0 + i * (barH + gap);
+    c2d.fillStyle = '#8a8fa8';
+    c2d.font = `${Math.min(11, barH - 4)}px sans-serif`;
+    c2d.textBaseline = 'middle';
+    c2d.fillText(METER_LABELS[role] ?? role, 6, y + barH / 2);
+    const barX = labelW + 4, barW = W - barX - 6;
+    c2d.fillStyle = '#2a2e3a';
+    c2d.beginPath();
+    c2d.roundRect(barX, y, barW, barH, 3);
+    c2d.fill();
+    const level = Math.min(1, Math.max(0, peak));
+    if (level > 0.001) {
+      const fillW = level * barW;
+      c2d.fillStyle = level > 0.9 ? '#ef5f6b' : level > 0.5 ? '#f0a238' : '#4f7cff';
+      c2d.beginPath();
+      c2d.roundRect(barX, y, fillW, barH, 3);
+      c2d.fill();
+    }
+  });
+}
+
+function drawMeterText(c2d, canvas, text) {
+  c2d.fillStyle = '#1d212a';
+  c2d.fillRect(0, 0, canvas.width, canvas.height);
+  c2d.fillStyle = '#8a8fa8';
+  c2d.font = '11px sans-serif';
+  c2d.textBaseline = 'middle';
+  c2d.fillText(text, 8, canvas.height / 2);
 }
 
 function showError(msg) {

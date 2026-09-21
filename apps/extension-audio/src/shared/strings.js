@@ -238,6 +238,11 @@ export const POPUP = Object.freeze({
   // I4b task 4: the line after a recording stops (opens the Recordings page on that session; nothing is uploaded from the popup)
   transcribeLine: 'Transcribe with IronMemo →',
   transcribeHint: 'Opens the Recordings page on this recording. Nothing is uploaded until you click Transcribe there.',
+  meterMic: 'Mic',
+  meterTab: 'Tab',
+  meterMix: 'Mix',
+  meterWaiting: 'Waiting for audio…',
+  meterPaused: 'Paused',
 });
 
 /** Reason → sentence, with a readable fallback for reasons the map does not know. */

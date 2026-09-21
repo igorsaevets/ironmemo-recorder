@@ -66,6 +66,7 @@ const state = {
   stopping: false,
   lastQuotaWarnAt: 0,
   storageEstimate: null,
+  analysers: new Map(),
 };
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -287,6 +288,7 @@ async function start({ sessionId, streamId, settings, startTimings = null, sourc
   state.appliedReport = applied;
   await writeCaptureReport(false);
   logEvent({ t: 'session_started', engine: state.engine, roles: applied.roles });
+  setupLevelAnalysers();
   return { ok: true, appliedReport: applied };
 }
 
@@ -373,6 +375,64 @@ function buildMix(ac, micStream, tabStream) {
     if (tabStream) { const t = ac.createMediaStreamSource(tabStream); t.connect(dest); state.mixSources.set('remote_tab', t); }
   }
   return { stream: dest.stream, dest };
+}
+
+// ───────────────────────────── UF1: levels from actual capture streams ──
+
+function setupLevelAnalysers() {
+  const ac = state.audioContext;
+  if (!ac) return;
+  for (const [role, t] of state.targets) {
+    try {
+      const src = ac.createMediaStreamSource(t.stream);
+      const an = ac.createAnalyser();
+      an.fftSize = 256;
+      src.connect(an);
+      state.analysers.set(role, { analyser: an, source: src });
+    } catch (e) {
+      logEvent({ t: 'analyser_setup_error', role, error: String(e?.message ?? e) });
+    }
+  }
+  if (!state.analysers.size) return;
+  const buf = new Float32Array(128);
+  state.timers.push(setInterval(() => {
+    if (!state.sessionId) return;
+    try {
+      const levels = {};
+      for (const [role, { analyser }] of state.analysers) {
+        analyser.getFloatTimeDomainData(buf);
+        let peak = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const abs = Math.abs(buf[i]);
+          if (abs > peak) peak = abs;
+        }
+        levels[role] = Math.round(peak * 1000) / 1000;
+      }
+      report('levels', { levels });
+    } catch (e) { /* level computation must never break recording */ }
+  }, 100));
+}
+
+function replaceAnalyser(role, stream) {
+  const old = state.analysers.get(role);
+  if (old) { try { old.source.disconnect(); } catch {} }
+  if (!state.audioContext || !stream) { state.analysers.delete(role); return; }
+  try {
+    const src = state.audioContext.createMediaStreamSource(stream);
+    const an = state.audioContext.createAnalyser();
+    an.fftSize = 256;
+    src.connect(an);
+    state.analysers.set(role, { analyser: an, source: src });
+  } catch (e) {
+    state.analysers.delete(role);
+  }
+}
+
+function cleanupAnalysers() {
+  for (const [, { source }] of state.analysers) {
+    try { source.disconnect(); } catch {}
+  }
+  state.analysers.clear();
 }
 
 // ───────────────────────────────────────────── движок: MediaRecorder ──
@@ -772,6 +832,7 @@ async function onTrackEnded(role, track) {
     // Вкладка закрыта или захват отозван. streamId одноразовый и выдаётся
     // только service worker'у по жесту — переоткрыть отсюда нельзя.
     if (state.worker) await workerRequest({ type: 'CLOSE_ROLE', role, reason: 'tab_track_ended' }, 'ROLE_CLOSED', { role }).catch(() => {});
+    replaceAnalyser(role, null);
     state.lost[role] = { label, ...nowPair(), policy: 'close_role' };
     report('warning', { error: `Захват вкладки завершился (вкладка закрыта или навигация запрещена). Микрофон продолжает записываться.` });
     return;
@@ -834,6 +895,7 @@ async function reacquireMic(role, device, lost, { forceDefault = false } = {}) {
     state.journal.push({ event: 'device_gap', role, gapMs, lostWall: lost.wall, resumedWall: Date.now(), segment: fresh.segment });
     logEvent({ t: 'device_returned', role, label: track.label, gapMs, match: forceDefault ? 'default' : 'same_device', note: 'MediaRecorder: new segment, gap filled only on remux' });
   }
+  replaceAnalyser(role, stream);
   delete state.lost[role];
   report('info', { error: null, info: `Устройство «${track.label}» снова записывается (пауза ${Math.round(gapMs / 100) / 10} с).` });
 }
@@ -1118,6 +1180,7 @@ async function stop({ reason = 'user' } = {}) {
   let workerResult = null;
   for (const t of state.timers) clearInterval(t);
   state.timers = [];
+  cleanupAnalysers();
   navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange);
   state.deviceWatchInstalled = false;
   logEvent({ t: 'stop_requested', reason });
@@ -1172,7 +1235,7 @@ async function stop({ reason = 'user' } = {}) {
   Object.assign(state, {
     sessionId: null, recorders: [], streams: [], audioContext: null, passthroughNode: null, mixDest: null,
     opfsDir: null, targets: new Map(), pending: new Map(), lost: {}, paused: false, engine: null,
-    frozen: {}, stopping: false,
+    frozen: {}, stopping: false, analysers: new Map(),
   });
   return { ok: true, result };
 }

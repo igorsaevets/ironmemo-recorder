@@ -38,6 +38,8 @@ import { sourceTypeFromUrl } from '../ingest/source-type.js';
 // получении START = сколько worker уже живёт: малое значение = холодный старт.
 const SW_BOOT = { wall: Date.now(), timeOrigin: performance.timeOrigin };
 
+let volatileLevels = null;
+
 const OFFSCREEN_PATH = 'src/offscreen/offscreen.html';
 const PERMISSION_PATH = 'src/permission/permission.html';
 const STATE_KEY = 'ironmemo.captureState.v1';
@@ -285,6 +287,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     try {
       switch (msg.type) {
         case 'GET_STATE':          return sendResponse({ ok: true, state: await getState() });
+        case 'GET_LEVELS':         return sendResponse({ ok: true, levels: volatileLevels });
         case 'START':              return sendResponse({ ok: true, state: await startCapture(msg) });
         case 'STOP':               return sendResponse({ ok: true, state: await stopCapture() });
         case 'PAUSE':              return sendResponse({ ok: true, state: await pauseCapture() });
@@ -307,6 +310,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           if (msg.event === 'warning') await setState({ lastWarning: msg.error, lastWarningAt: Date.now() });
           if (msg.event === 'info') await setState({ lastInfo: msg.info ?? null, lastInfoAt: Date.now() });
           if (msg.event === 'progress') await setState({ progress: msg.progress, progressAt: Date.now() });
+          if (msg.event === 'levels') { volatileLevels = msg.levels; return sendResponse({ ok: true }); }
           if (msg.event === 'fatal') {
             // Offscreen already stopped the session (write failure). Files are kept; status = error.
             const s = await getState();
