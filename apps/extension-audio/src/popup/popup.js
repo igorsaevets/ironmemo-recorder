@@ -206,15 +206,22 @@ async function refresh() {
   }
 
   clearInterval(timerHandle);
-  if (rec && s.startedAt) {
-    const tick = () => {
-      const sec = Math.floor((Date.now() - s.startedAt) / 1000);
-      $('timer').textContent = [sec / 3600, (sec % 3600) / 60, sec % 60]
+  if ((rec || paused) && s.startedAt) {
+    const formatTimer = (ms) => {
+      const sec = Math.max(0, Math.floor(ms / 1000));
+      return [sec / 3600, (sec % 3600) / 60, sec % 60]
         .map((n) => String(Math.floor(n)).padStart(2, '0')).join(':');
     };
-    tick();
-    timerHandle = setInterval(tick, 1000);
-  } else if (!paused) {
+    if (rec) {
+      const base = s.mediaElapsedMs ?? 0;
+      const resumedAt = s.lastResumedAt ?? s.startedAt;
+      const tick = () => { $('timer').textContent = formatTimer(base + Date.now() - resumedAt); };
+      tick();
+      timerHandle = setInterval(tick, 1000);
+    } else {
+      $('timer').textContent = formatTimer(s.mediaElapsedMs ?? 0);
+    }
+  } else {
     $('timer').textContent = '00:00:00';
   }
 }

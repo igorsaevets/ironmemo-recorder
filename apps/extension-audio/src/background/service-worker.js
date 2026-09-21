@@ -208,8 +208,10 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
     T.totalMs = Date.now() - T.receivedAt;
     T.clickToRecordingMs = clickedAt ? Date.now() - clickedAt : null;
 
+    const now = Date.now();
     return await setState({
-      status: 'recording', sessionId, startedAt: Date.now(),
+      status: 'recording', sessionId, startedAt: now,
+      mediaElapsedMs: 0, lastResumedAt: now,
       appliedReport: res.appliedReport ?? null, startTimings: T,
       lastStopped: null, // I4b: the popup's «Transcribe with IronMemo →» line refers to the LAST stopped recording
     });
@@ -251,6 +253,7 @@ async function stopCapture() {
     .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   const next = await setState({
     status: 'idle', sessionId: null, startedAt: null, progress: null, lastWarning: null, lastInfo: null,
+    mediaElapsedMs: null, lastResumedAt: null,
     lastResult: res?.result ?? null, error: res?.ok ? null : (res?.error ?? null),
     // I4b task 4: the popup offers one line «Transcribe with IronMemo →» for the recording that just stopped
     lastStopped: prev?.sessionId && res?.ok ? { sessionId: prev.sessionId, at: Date.now() } : null,
@@ -260,13 +263,16 @@ async function stopCapture() {
 }
 
 async function pauseCapture() {
+  const s = await getState();
+  const now = Date.now();
+  const elapsed = (s.mediaElapsedMs ?? 0) + (s.lastResumedAt ? now - s.lastResumedAt : 0);
   await chrome.runtime.sendMessage({ target: 'offscreen', type: 'PAUSE' });
-  return setState({ status: 'paused' });
+  return setState({ status: 'paused', mediaElapsedMs: elapsed, lastResumedAt: null });
 }
 
 async function resumeCapture() {
   await chrome.runtime.sendMessage({ target: 'offscreen', type: 'RESUME' });
-  return setState({ status: 'recording' });
+  return setState({ status: 'recording', lastResumedAt: Date.now() });
 }
 
 async function checkMicPermission() {
@@ -317,6 +323,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             const s = await getState();
             await setState({ status: 'error', error: msg.error, errorRaw: JSON.stringify(msg.fatal ?? null),
                              sessionId: null, startedAt: null, progress: null, lastResult: msg.result ?? null,
+                             mediaElapsedMs: null, lastResumedAt: null,
                              stoppedByFatal: { sessionId: s.sessionId, at: Date.now(), fatal: msg.fatal ?? null } });
             await closeOffscreenIfIdle();
           }
