@@ -74,6 +74,13 @@ footer { display: flex; justify-content: space-between; align-items: center; mar
                color: var(--muted); white-space: nowrap; }
 .player-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
 
+/* ── UF4: trim bar ─────────────────────────────────────────────────────────────────── */
+.trim-bar { display: flex; align-items: center; gap: 8px; padding: 8px 4px;
+            border-top: 1px dashed var(--line); flex-wrap: wrap; }
+.trim-bar[hidden] { display: none; }
+.trim-range { font: 12px/1 ui-monospace, "SF Mono", Consolas, monospace;
+              color: var(--accent); white-space: nowrap; }
+
 /* ── I4a: "Transcribe with IronMemo" block per session ─────────────────────────────── */
 .ingest { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line);
           display: flex; flex-direction: column; gap: 8px; }

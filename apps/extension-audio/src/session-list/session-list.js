@@ -22,6 +22,7 @@ import { FILES, isTranscriptFile, formatStamp } from '../ingest/transcript.js';
 import { S, reasonText } from '../shared/strings.js';
 import { isPlausibleEmail } from '../ingest/claim.js';
 import { buildDiagnostics } from '../ingest/diag.js';
+import { demuxOggOpus, opusPacketSamples, OggOpusMuxer } from '../shared/ogg-opus.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -57,8 +58,9 @@ let settings = null;
 let sessionsById = new Map();
 let pendingConsentSession = null;  // the session whose Transcribe click opened the disclosure
 let accountState = { hasAccount: false, kind: null, lost: null, emailMasked: null }; // mirrors ingest.accountStatus() for rendering
-let activePlayer = null;           // UF3: { audio, blobUrl, sid, role, el, seeking }
+let activePlayer = null;           // UF3: { audio, blobUrl, sid, role, el, seeking, fileName }
 let playSeq = 0;                   // monotonic counter — guards against rapid-click races in startPlayback
+let trimState = null;              // UF4: { startSec, endSec, previewing }
 
 boot().catch((e) => showStatus(`Failed to load the list: ${e?.message ?? e}`, 'error'));
 
@@ -274,6 +276,7 @@ function renderSession(s) {
     </div>
     <div class="roles"></div>
     <div class="player-bar" hidden></div>
+    <div class="trim-bar" hidden></div>
     <div class="ingest" hidden></div>
     <div class="session-actions">
       ${isCapturing ? '' : '<button class="btn danger" data-action="delete">Delete session</button>'}
@@ -749,6 +752,14 @@ async function handleAction(e, session, sessionEl) {
   }
   if (action === 'player-stop') { stopPlayback(); return; }
 
+  // ── UF4: trim ──
+  if (action === 'trim-enter') { enterTrimMode(); return; }
+  if (action === 'trim-mark-start') { if (activePlayer && trimState) { trimState.startSec = activePlayer.audio.currentTime; renderTrimBar(); } return; }
+  if (action === 'trim-mark-end') { if (activePlayer && trimState) { trimState.endSec = activePlayer.audio.currentTime; renderTrimBar(); } return; }
+  if (action === 'trim-preview') { previewTrim(); return; }
+  if (action === 'trim-export') { await exportTrim(session, sessionEl); return; }
+  if (action === 'trim-cancel') { exitTrimMode(); return; }
+
   if (action === 'download-file') {
     const file = btn.dataset.file;
     const roleKey = btn.dataset.role;
@@ -899,14 +910,16 @@ async function startPlayback(sid, roleKey, fileName, sessionEl) {
 
   const audio = new Audio(blobUrl);
   const playerBar = sessionEl.querySelector('.player-bar');
-  activePlayer = { audio, blobUrl, sid, role: roleKey, el: playerBar, seeking: false };
+  activePlayer = { audio, blobUrl, sid, role: roleKey, el: playerBar, seeking: false, fileName };
 
   const label = ROLE_LABEL[roleKey] ?? roleKey;
+  const isOgg = fileName.endsWith('.opus');
   playerBar.innerHTML = `
     <button class="btn" data-action="player-toggle" aria-label="${escapeHtml(S.btnPause)}">${escapeHtml(S.btnPause)}</button>
     <span class="player-time"><span data-role="current">0:00</span> / <span data-role="total">${escapeHtml(S.playerDurationUnknown)}</span></span>
     <input type="range" class="player-seek" min="0" max="100" value="0" step="0.1" aria-label="Seek">
     <span class="player-label">${escapeHtml(label)}</span>
+    ${isOgg ? `<button class="btn" data-action="trim-enter" aria-label="${escapeHtml(S.btnTrim)}">${escapeHtml(S.btnTrim)}</button>` : ''}
     <button class="btn ghost" data-action="player-stop" aria-label="${escapeHtml(S.playerStop)}">&times;</button>
   `;
   playerBar.hidden = false;
@@ -946,6 +959,7 @@ async function startPlayback(sid, roleKey, fileName, sessionEl) {
 
 function stopPlayback() {
   if (!activePlayer) return;
+  exitTrimMode();
   const { audio, blobUrl, el, role, _cleanupSeek } = activePlayer;
   if (_cleanupSeek) _cleanupSeek();
   audio.pause();
@@ -973,6 +987,10 @@ function updatePlayerDisplay() {
 function updatePlayerTime() {
   if (!activePlayer) return;
   const { audio, el, seeking } = activePlayer;
+  if (trimState?.previewing && audio.currentTime >= trimState.endSec) {
+    audio.pause();
+    trimState.previewing = false;
+  }
   const cur = el.querySelector('[data-role="current"]');
   const tot = el.querySelector('[data-role="total"]');
   const seek = el.querySelector('.player-seek');
@@ -1225,6 +1243,127 @@ async function onClaimVerify() {
     claimError('code', claimErrorText(err));
     if (err?.kind === 'locked') claim.locked = true;
   } finally { claimBusy(false); }
+}
+
+// ── UF4: trim ──
+
+function enterTrimMode() {
+  if (!activePlayer || !isFinite(activePlayer.audio.duration) || activePlayer.audio.duration <= 0) return;
+  trimState = { startSec: 0, endSec: activePlayer.audio.duration, previewing: false };
+  renderTrimBar();
+}
+
+function exitTrimMode() {
+  if (!trimState) return;
+  trimState = null;
+  const bar = activePlayer?.el?.closest('.session')?.querySelector('.trim-bar');
+  if (bar) bar.hidden = true;
+}
+
+function renderTrimBar() {
+  if (!activePlayer || !trimState) return;
+  const bar = activePlayer.el.closest('.session')?.querySelector('.trim-bar');
+  if (!bar) return;
+  const dur = Math.max(0, trimState.endSec - trimState.startSec);
+  bar.innerHTML = `
+    <button class="btn" data-action="trim-mark-start">${escapeHtml(S.trimMarkStart(formatPlayerTime(trimState.startSec)))}</button>
+    <button class="btn" data-action="trim-mark-end">${escapeHtml(S.trimMarkEnd(formatPlayerTime(trimState.endSec)))}</button>
+    <span class="trim-range">${escapeHtml(S.trimSelection(formatPlayerTime(dur)))}</span>
+    <button class="btn" data-action="trim-preview">${escapeHtml(S.trimPreview)}</button>
+    <button class="btn primary" data-action="trim-export">${escapeHtml(S.trimExportSelection)}</button>
+    <button class="btn ghost" data-action="trim-cancel">${escapeHtml(S.trimCancel)}</button>
+  `;
+  bar.hidden = false;
+}
+
+function previewTrim() {
+  if (!activePlayer || !trimState) return;
+  if (trimState.startSec >= trimState.endSec) { showStatus(S.trimInvalidRange, 'error'); return; }
+  trimState.previewing = true;
+  activePlayer.audio.currentTime = trimState.startSec;
+  activePlayer.audio.play().catch((e) => { if (e?.name !== 'AbortError') showStatus(S.playerError(e?.message ?? String(e)), 'error'); });
+}
+
+async function exportTrim(session, sessionEl) {
+  if (!activePlayer || !trimState) return;
+  if (trimState.startSec >= trimState.endSec) { showStatus(S.trimInvalidRange, 'error'); return; }
+
+  const btn = sessionEl.querySelector('[data-action="trim-export"]');
+  if (btn) { btn.disabled = true; btn.textContent = S.trimExporting; }
+
+  try {
+    const result = await trimOggOpus(activePlayer.sid, activePlayer.fileName, trimState.startSec, trimState.endSec);
+
+    const verified = demuxOggOpus(result.bytes);
+    if (!verified.opusHead || verified.packets.length === 0) throw new Error('output verification failed: no valid packets');
+
+    const dateStr = session.startedAt ? new Date(session.startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-') : 'unknown';
+    const roleSlug = ROLE_SLUG[activePlayer.role] ?? activePlayer.role;
+    const startTag = formatPlayerTime(trimState.startSec).replace(/:/g, '.');
+    const endTag = formatPlayerTime(trimState.endSec).replace(/:/g, '.');
+    const filename = `IronMemo-${dateStr}-${roleSlug}-trim-${startTag}-${endTag}.opus`;
+
+    const blob = new Blob([result.bytes], { type: 'audio/ogg; codecs=opus' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+
+    if (btn) { btn.textContent = S.trimDone; setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = S.trimExportSelection; } }, 1500); }
+  } catch (e) {
+    showStatus(S.trimError(e?.message ?? String(e)), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = S.trimExportSelection; }
+  }
+}
+
+async function trimOggOpus(sid, fileName, startSec, endSec) {
+  const dh = await sessionDirHandle(sid);
+  const fh = await dh.getFileHandle(fileName);
+  const file = await fh.getFile();
+  const buf = new Uint8Array(await file.arrayBuffer());
+
+  const d = demuxOggOpus(buf);
+  if (!d.opusHead || !d.packets.length) throw new Error('not a valid Ogg/Opus file');
+
+  const startSample = Math.floor(startSec * 48000);
+  const endSample = Math.ceil(endSec * 48000);
+
+  let pos = 0;
+  const selected = [];
+  for (const pkt of d.packets) {
+    const dur = opusPacketSamples(pkt.data);
+    const pktEnd = pos + dur;
+    if (pktEnd > startSample && pos < endSample) selected.push({ data: pkt.data, samples: dur });
+    pos += dur;
+    if (pos >= endSample) break;
+  }
+
+  if (!selected.length) throw new Error(S.trimEmpty);
+
+  const mux = new OggOpusMuxer({
+    channels: d.opusHead.channels,
+    preSkip: d.opusHead.preSkip,
+    inputSampleRate: d.opusHead.inputSampleRate,
+    comments: [`ENCODER=IronMemo Trim (lossless packet copy, ${selected.length} packets)`],
+  });
+
+  const chunks = [...mux.headerPages()];
+  for (let i = 0; i < selected.length; i++) {
+    mux.addPacket(selected[i].data, selected[i].samples);
+    if ((i + 1) % 50 === 0) { const p = mux.flushPage(); if (p) chunks.push(p); }
+  }
+  const last = mux.flushPage({ eos: true });
+  if (last) chunks.push(last);
+
+  const total = chunks.reduce((a, c) => a + c.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+
+  return { bytes: out, packets: selected.length, durationSec: selected.reduce((a, p) => a + p.samples, 0) / 48000 };
 }
 
 // ─────────────────────────────────────────────────────────── format helpers ──

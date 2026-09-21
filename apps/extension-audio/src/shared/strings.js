@@ -239,6 +239,21 @@ export const S = Object.freeze({
   playerStop: 'Close player',
   playerDurationUnknown: '—',
   playerError: (msg) => `Cannot play: ${msg}`,
+
+  // ── trim (UF4) ──
+  btnTrim: 'Trim',
+  trimMarkStart: (t) => `Start: ${t}`,
+  trimMarkEnd: (t) => `End: ${t}`,
+  trimPreview: 'Preview',
+  trimExportSelection: 'Export Selection',
+  trimCancel: 'Cancel',
+  trimExporting: 'Exporting…',
+  trimDone: 'Exported',
+  trimNotSupported: 'Trim is only available for Opus recordings',
+  trimInvalidRange: 'Start must be before end',
+  trimEmpty: 'Selection contains no audio packets',
+  trimError: (msg) => `Trim failed: ${msg}`,
+  trimSelection: (dur) => `Selection: ${dur}`,
 });
 
 /** Popup: the one-time notice existing users see after the update (no consent bump — ADR-008 «Уточнения» 5). */
