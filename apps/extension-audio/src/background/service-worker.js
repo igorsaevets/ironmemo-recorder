@@ -264,6 +264,7 @@ async function stopCapture() {
 
 async function pauseCapture() {
   const s = await getState();
+  if (s.status !== 'recording') return s;
   const now = Date.now();
   const elapsed = (s.mediaElapsedMs ?? 0) + (s.lastResumedAt ? now - s.lastResumedAt : 0);
   await chrome.runtime.sendMessage({ target: 'offscreen', type: 'PAUSE' });
@@ -271,6 +272,8 @@ async function pauseCapture() {
 }
 
 async function resumeCapture() {
+  const s = await getState();
+  if (s.status !== 'paused') return s;
   await chrome.runtime.sendMessage({ target: 'offscreen', type: 'RESUME' });
   return setState({ status: 'recording', lastResumedAt: Date.now() });
 }

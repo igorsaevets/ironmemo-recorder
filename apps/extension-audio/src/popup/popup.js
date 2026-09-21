@@ -208,7 +208,7 @@ async function refresh() {
   clearInterval(timerHandle);
   if ((rec || paused) && s.startedAt) {
     const formatTimer = (ms) => {
-      const sec = Math.max(0, Math.floor(ms / 1000));
+      const sec = Number.isFinite(ms) ? Math.max(0, Math.floor(ms / 1000)) : 0;
       return [sec / 3600, (sec % 3600) / 60, sec % 60]
         .map((n) => String(Math.floor(n)).padStart(2, '0')).join(':');
     };
