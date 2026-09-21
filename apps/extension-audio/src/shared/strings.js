@@ -273,7 +273,7 @@ export const POPUP = Object.freeze({
   transcribeHint: 'Opens the Recordings page on this recording. Nothing is uploaded until you click Transcribe there.',
   micLabel: 'Microphone',
   micDefault: 'Default (follows OS)',
-  micNotFound: (name) => `"${name}" is not available — will use default`,
+  micNotFound: (name) => `"${name}" is not available — choose another or use Default.`,
   micNoLabels: 'Grant microphone access to see device names.',
   micNoLabelsCta: 'Open Settings',
   micWarnLoopback: 'This device captures system playback, not your voice.',

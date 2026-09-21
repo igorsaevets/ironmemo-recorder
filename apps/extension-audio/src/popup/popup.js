@@ -22,6 +22,8 @@ const NOTICE_ID = 'cloud-option-2026-09';
 
 let levelPoll = null;
 let settingsValues = null;
+let micPickerGen = 0;
+let micDebounce = null;
 
 boot().catch((e) => console.error('[popup] boot failed', e));
 
@@ -120,7 +122,8 @@ async function init() {
   });
 
   navigator.mediaDevices?.addEventListener('devicechange', () => {
-    if (settingsValues) renderMicPicker(settingsValues);
+    clearTimeout(micDebounce);
+    micDebounce = setTimeout(() => { if (settingsValues) renderMicPicker(settingsValues); }, 200);
   });
 
   // Состояние живёт в storage, а не в popup: popup закрывается, запись — нет.
@@ -149,6 +152,7 @@ async function renderConfig() {
 }
 
 async function renderMicPicker(v) {
+  const gen = ++micPickerGen;
   const mode = getByPath(v, 'source.mode');
   const picker = $('micPicker');
   if (mode === 'tab') { picker.hidden = true; return; }
@@ -161,6 +165,7 @@ async function renderMicPicker(v) {
 
   let devices;
   try { devices = await listAudioDevices(); } catch { devices = { inputs: [], outputs: [], hasLabels: false }; }
+  if (gen !== micPickerGen) return;
 
   sel.innerHTML = '';
 
@@ -172,12 +177,19 @@ async function renderMicPicker(v) {
     sel.disabled = true;
     warn.hidden = true;
     hint.hidden = false;
-    hint.innerHTML = `${esc(POPUP.micNoLabels)} <a href="#" id="micOpenSettings">${esc(POPUP.micNoLabelsCta)}</a>`;
-    $('micOpenSettings').addEventListener('click', (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); });
+    hint.textContent = '';
+    hint.append(
+      document.createTextNode(POPUP.micNoLabels + ' '),
+      Object.assign(document.createElement('a'), {
+        href: '#', textContent: POPUP.micNoLabelsCta,
+        onclick: (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); },
+      }),
+    );
     return;
   }
 
   hint.hidden = true;
+  hint.textContent = '';
 
   const defOpt = document.createElement('option');
   defOpt.value = 'default';
@@ -185,38 +197,50 @@ async function renderMicPicker(v) {
   sel.appendChild(defOpt);
 
   const stored = getByPath(v, 'source.micDeviceId');
-  const curId = (stored && typeof stored === 'object') ? stored.deviceId : stored;
+  const resolved = resolveDevice(stored, devices.inputs);
+  const matchId = resolved.device?.deviceId;
 
   for (const d of devices.inputs) {
     if (d.isDefault) continue;
     const opt = document.createElement('option');
     opt.value = d.deviceId;
     let label = d.label;
-    if (d.cls === DEVICE_CLASS.LOOPBACK) label += ' ⚠';
-    else if (d.cls === DEVICE_CLASS.BT_HANDSFREE) label += ' ⚠';
+    if (d.cls === DEVICE_CLASS.LOOPBACK || d.cls === DEVICE_CLASS.BT_HANDSFREE) label += ' ⚠';
     opt.textContent = label;
-    if (d.deviceId === curId) opt.selected = true;
+    if (d.deviceId === matchId) opt.selected = true;
     sel.appendChild(opt);
   }
 
-  const resolved = resolveDevice(stored, devices.inputs);
   if (stored && stored !== 'default' && resolved.match === 'not_found') {
+    const storedName = (typeof stored === 'object' ? stored.label || stored.deviceId : stored) || 'Saved microphone';
     warn.hidden = false;
     warn.className = 'mic-warn danger';
-    warn.textContent = POPUP.micNotFound(stored.label || stored);
+    warn.textContent = POPUP.micNotFound(storedName);
   } else {
     updateMicWarn(resolved.device);
   }
 
-  sel.disabled = false;
+  const isActive = await isRecordingActive();
+  sel.disabled = isActive;
+
   sel.onchange = async () => {
     const chosen = devices.inputs.find((d) => d.deviceId === sel.value);
     const newVal = (!chosen || sel.value === 'default') ? 'default'
       : { deviceId: chosen.deviceId, label: chosen.label, groupId: chosen.groupId };
-    setByPath(v, 'source.micDeviceId', newVal);
-    await saveSettings(v);
-    updateMicWarn(chosen ?? null);
+    const fresh = await loadSettings();
+    setByPath(fresh, 'source.micDeviceId', newVal);
+    await saveSettings(fresh);
+    settingsValues = fresh;
+    const resolvedNew = resolveDevice(newVal, devices.inputs);
+    updateMicWarn(resolvedNew.device);
   };
+}
+
+async function isRecordingActive() {
+  try {
+    const s = await state();
+    return s.status === 'recording' || s.status === 'paused' || s.status === 'awaiting_perm';
+  } catch { return false; }
 }
 
 function updateMicWarn(device) {
@@ -234,8 +258,6 @@ function updateMicWarn(device) {
   warn.textContent = msgs[device.cls] || '';
   if (!warn.textContent) warn.hidden = true;
 }
-
-function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 
 async function state() {
   const r = await chrome.runtime.sendMessage({ target: 'background', type: 'GET_STATE' });
@@ -271,13 +293,6 @@ async function refresh() {
   const micSel = $('micSelect');
   if (micSel) {
     micSel.disabled = rec || paused || awaitingPerm;
-    const micHint = $('micHint');
-    if ((rec || paused) && micHint) {
-      micHint.hidden = false;
-      micHint.textContent = POPUP.micDisabledRecording;
-    } else if (micHint && !micHint.querySelector('a')) {
-      micHint.hidden = true;
-    }
   }
 
   if (rec || paused) startLevelMeter(); else stopLevelMeter();
