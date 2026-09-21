@@ -1392,8 +1392,9 @@ async function trimOggOpus(sid, fileName, startSec, endSec) {
 
 function sanitizeFileName(name) {
   if (!name) return null;
-  const clean = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim();
-  return clean.slice(0, 60) || null;
+  let clean = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim();
+  clean = Array.from(clean).slice(0, 60).join('');
+  return clean.replace(/[.\s]+$/, '') || null;
 }
 
 function filenameBase(session) {
@@ -1416,8 +1417,8 @@ async function saveMeta(sid, patch) {
   if (merged.displayName === null || merged.displayName === '') delete merged.displayName;
   const fh = await dh.getFileHandle('meta.json', { create: true });
   const writable = await fh.createWritable();
-  await writable.write(JSON.stringify(merged));
-  await writable.close();
+  try { await writable.write(JSON.stringify(merged)); await writable.close(); }
+  catch (e) { try { await writable.abort(); } catch {} throw e; }
 }
 
 function handleRename(session, sessionEl) {
