@@ -1,6 +1,7 @@
-import { loadSettings } from '../shared/settings-store.js';
-import { getByPath, estimateMBPerHour } from '../shared/settings-schema.js';
+import { loadSettings, saveSettings } from '../shared/settings-store.js';
+import { getByPath, setByPath, estimateMBPerHour } from '../shared/settings-schema.js';
 import { POPUP } from '../shared/strings.js';
+import { listAudioDevices, resolveDevice, DEVICE_CLASS } from '../shared/audio-devices.js';
 
 const $ = (id) => document.getElementById(id);
 let timerHandle = null;
@@ -20,6 +21,7 @@ const NOTICE_KEY = 'ironmemo.updateNotice.v1';
 const NOTICE_ID = 'cloud-option-2026-09';
 
 let levelPoll = null;
+let settingsValues = null;
 
 boot().catch((e) => console.error('[popup] boot failed', e));
 
@@ -117,6 +119,10 @@ async function init() {
     if (sid) chrome.tabs.create({ url: chrome.runtime.getURL(`src/session-list/session-list.html#sid=${encodeURIComponent(sid)}`) });
   });
 
+  navigator.mediaDevices?.addEventListener('devicechange', () => {
+    if (settingsValues) renderMicPicker(settingsValues);
+  });
+
   // Состояние живёт в storage, а не в popup: popup закрывается, запись — нет.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes['ironmemo.captureState.v1']) refresh();
@@ -125,6 +131,7 @@ async function init() {
 
 async function renderConfig() {
   const v = await loadSettings();
+  settingsValues = v;
   uploadEnabled = getByPath(v, 'upload.enabled') !== false;
   const modeLabel = { mic: 'microphone', tab: 'tab audio',
                       'mic+tab': 'microphone + tab' }[getByPath(v, 'source.mode')];
@@ -136,10 +143,99 @@ async function renderConfig() {
     `<div>Source: <b>${modeLabel}</b> ${parts.join(' ')}</div>` +
     `<div>Codec: <b>${getByPath(v, 'audioEnc.codec')}</b> / ${getByPath(v, 'audioEnc.container')}, `
     + `<b>${getByPath(v, 'audioEnc.bitrateKbps')} kbps</b></div>` +
-    `<div>Segments: <b>${getByPath(v, 'storage.segmentStrategy')}</b></div>` +
-    `<div>Est. size: <b>${estimateMBPerHour(v)} MB/h</b></div>` +
-    `<div>Profile: <b>${getByPath(v, 'experiment.profileId')}</b></div>`;
+    `<div>Est. size: <b>${estimateMBPerHour(v)} MB/h</b></div>`;
+
+  await renderMicPicker(v);
 }
+
+async function renderMicPicker(v) {
+  const mode = getByPath(v, 'source.mode');
+  const picker = $('micPicker');
+  if (mode === 'tab') { picker.hidden = true; return; }
+  picker.hidden = false;
+
+  $('micLabel').textContent = POPUP.micLabel;
+  const sel = $('micSelect');
+  const warn = $('micWarn');
+  const hint = $('micHint');
+
+  let devices;
+  try { devices = await listAudioDevices(); } catch { devices = { inputs: [], outputs: [], hasLabels: false }; }
+
+  sel.innerHTML = '';
+
+  if (!devices.hasLabels) {
+    const opt = document.createElement('option');
+    opt.value = 'default';
+    opt.textContent = POPUP.micDefault;
+    sel.appendChild(opt);
+    sel.disabled = true;
+    warn.hidden = true;
+    hint.hidden = false;
+    hint.innerHTML = `${esc(POPUP.micNoLabels)} <a href="#" id="micOpenSettings">${esc(POPUP.micNoLabelsCta)}</a>`;
+    $('micOpenSettings').addEventListener('click', (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); });
+    return;
+  }
+
+  hint.hidden = true;
+
+  const defOpt = document.createElement('option');
+  defOpt.value = 'default';
+  defOpt.textContent = POPUP.micDefault;
+  sel.appendChild(defOpt);
+
+  const stored = getByPath(v, 'source.micDeviceId');
+  const curId = (stored && typeof stored === 'object') ? stored.deviceId : stored;
+
+  for (const d of devices.inputs) {
+    if (d.isDefault) continue;
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    let label = d.label;
+    if (d.cls === DEVICE_CLASS.LOOPBACK) label += ' ⚠';
+    else if (d.cls === DEVICE_CLASS.BT_HANDSFREE) label += ' ⚠';
+    opt.textContent = label;
+    if (d.deviceId === curId) opt.selected = true;
+    sel.appendChild(opt);
+  }
+
+  const resolved = resolveDevice(stored, devices.inputs);
+  if (stored && stored !== 'default' && resolved.match === 'not_found') {
+    warn.hidden = false;
+    warn.className = 'mic-warn danger';
+    warn.textContent = POPUP.micNotFound(stored.label || stored);
+  } else {
+    updateMicWarn(resolved.device);
+  }
+
+  sel.disabled = false;
+  sel.onchange = async () => {
+    const chosen = devices.inputs.find((d) => d.deviceId === sel.value);
+    const newVal = (!chosen || sel.value === 'default') ? 'default'
+      : { deviceId: chosen.deviceId, label: chosen.label, groupId: chosen.groupId };
+    setByPath(v, 'source.micDeviceId', newVal);
+    await saveSettings(v);
+    updateMicWarn(chosen ?? null);
+  };
+}
+
+function updateMicWarn(device) {
+  const warn = $('micWarn');
+  if (!device || device.cls === DEVICE_CLASS.PHYSICAL || device.cls === DEVICE_CLASS.UNKNOWN) {
+    warn.hidden = true; return;
+  }
+  warn.hidden = false;
+  warn.className = device.cls === DEVICE_CLASS.LOOPBACK ? 'mic-warn danger' : 'mic-warn';
+  const msgs = {
+    [DEVICE_CLASS.LOOPBACK]: POPUP.micWarnLoopback,
+    [DEVICE_CLASS.BT_HANDSFREE]: POPUP.micWarnBtHandsfree,
+    [DEVICE_CLASS.VIRTUAL_PROCESSED]: POPUP.micWarnVirtualProcessed,
+  };
+  warn.textContent = msgs[device.cls] || '';
+  if (!warn.textContent) warn.hidden = true;
+}
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 
 async function state() {
   const r = await chrome.runtime.sendMessage({ target: 'background', type: 'GET_STATE' });
@@ -171,6 +267,18 @@ async function refresh() {
   $('stop').hidden  = !(rec || paused);
   $('pause').textContent = paused ? 'Resume' : 'Pause';
   $('start').disabled = $('pause').disabled = $('stop').disabled = false;
+
+  const micSel = $('micSelect');
+  if (micSel) {
+    micSel.disabled = rec || paused || awaitingPerm;
+    const micHint = $('micHint');
+    if ((rec || paused) && micHint) {
+      micHint.hidden = false;
+      micHint.textContent = POPUP.micDisabledRecording;
+    } else if (micHint && !micHint.querySelector('a')) {
+      micHint.hidden = true;
+    }
+  }
 
   if (rec || paused) startLevelMeter(); else stopLevelMeter();
 
