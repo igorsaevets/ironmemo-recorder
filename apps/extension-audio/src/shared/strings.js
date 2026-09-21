@@ -258,6 +258,10 @@ export const S = Object.freeze({
   // ── rename (UF6a) ──
   btnRename: 'Rename',
   renamePlaceholder: 'Enter a name for this recording',
+
+  // ── search (UF6b) ──
+  searchPlaceholder: 'Search by name or date…',
+  searchNoResults: 'No recordings match your search.',
 });
 
 /** Popup: the one-time notice existing users see after the update (no consent bump — ADR-008 «Уточнения» 5). */

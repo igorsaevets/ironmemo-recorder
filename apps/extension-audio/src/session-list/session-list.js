@@ -61,6 +61,7 @@ let accountState = { hasAccount: false, kind: null, lost: null, emailMasked: nul
 let activePlayer = null;           // UF3: { audio, blobUrl, sid, role, el, seeking, fileName }
 let playSeq = 0;                   // monotonic counter — guards against rapid-click races in startPlayback
 let trimState = null;              // UF4: { startSec, endSec, previewing }
+let filterTimer = null;            // UF6b: debounce for search input
 
 boot().catch((e) => showStatus(`Failed to load the list: ${e?.message ?? e}`, 'error'));
 
@@ -99,6 +100,7 @@ async function boot() {
   }
   window.addEventListener('pagehide', () => stopPlayback());
   $('copyDiag').addEventListener('click', () => copyDiagnostics());
+  wireSearch();
   await renderAccount(); // before the list: the waiting-long hint reads accountState
   await refresh();
   focusHashSession(); // I4b task 4: the popup's line opens this page on #sid=<session>
@@ -244,13 +246,17 @@ function render(sessions) {
   const list = $('list');
   list.innerHTML = '';
 
-  $('totalCount').textContent = sessions.length;
-  $('totalSize').textContent = formatBytes(sessions.reduce((a, s) => a + s.bytes, 0));
-
-  if (!sessions.length) { $('empty').hidden = false; return; }
+  if (!sessions.length) {
+    $('empty').hidden = false;
+    $('searchBar').hidden = true;
+    $('searchEmpty').hidden = true;
+    $('totalCount').textContent = '0';
+    $('totalSize').textContent = '0 B';
+    return;
+  }
   $('empty').hidden = true;
-
   for (const s of sessions) list.appendChild(renderSession(s));
+  applyFilter($('searchInput').value);
 }
 
 function renderSession(s) {
@@ -830,9 +836,15 @@ async function handleAction(e, session, sessionEl) {
       await deleteSession(session.sid);
       sessionEl.remove();
       sessionsById.delete(session.sid);
-      const remaining = document.querySelectorAll('#list .session').length;
-      $('totalCount').textContent = remaining;
-      if (!remaining) $('empty').hidden = false;
+      if (!sessionsById.size) {
+        $('empty').hidden = false;
+        $('searchBar').hidden = true;
+        $('searchEmpty').hidden = true;
+        $('totalCount').textContent = '0';
+        $('totalSize').textContent = '0 B';
+      } else {
+        applyFilter($('searchInput').value);
+      }
       showStatus('Session deleted.', 'ok');
       setTimeout(() => $('status').hidden = true, 2500);
     } catch (err) {
@@ -1489,6 +1501,62 @@ function rebuildSessionHead(s, sessionEl) {
     ${hasName ? `<div class="session-date secondary">${dateStr}</div>` : ''}
     <div class="session-meta">Duration: ${duration} · On disk: ${formatBytes(s.bytes)}</div>
   `;
+}
+
+// ── UF6b: search/filter ──────────────────────────────────────────────────── //
+
+function wireSearch() {
+  const input = $('searchInput');
+  input.placeholder = S.searchPlaceholder;
+  $('searchEmpty').querySelector('.empty-title').textContent = S.searchNoResults;
+
+  input.addEventListener('input', () => {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(() => applyFilter(input.value), 150);
+    $('searchClear').hidden = !input.value;
+  });
+  $('searchClear').addEventListener('click', () => {
+    input.value = '';
+    $('searchClear').hidden = true;
+    applyFilter('');
+    input.focus();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && input.value) {
+      e.preventDefault();
+      input.value = '';
+      $('searchClear').hidden = true;
+      applyFilter('');
+    }
+  });
+}
+
+function applyFilter(query) {
+  const q = query.toLowerCase().trim();
+  const cards = $('list').querySelectorAll('.session');
+  let shown = 0;
+  const total = cards.length;
+
+  cards.forEach((card) => {
+    const s = sessionsById.get(card.dataset.sid);
+    if (!s) { card.hidden = true; return; }
+    const match = !q || matchSession(s, q);
+    card.hidden = !match;
+    if (match) shown++;
+  });
+
+  $('totalCount').textContent = (q && shown < total) ? `${shown} of ${total}` : String(total);
+  $('totalSize').textContent = formatBytes([...sessionsById.values()].reduce((a, s) => a + s.bytes, 0));
+  $('searchEmpty').hidden = !(q && total > 0 && shown === 0);
+  $('searchBar').hidden = total === 0;
+}
+
+function matchSession(s, q) {
+  if (s.displayName && s.displayName.toLowerCase().includes(q)) return true;
+  if (s.startedAt && formatDate(new Date(s.startedAt)).toLowerCase().includes(q)) return true;
+  if (s.sid.toLowerCase().includes(q)) return true;
+  if (s.engine && s.engine.toLowerCase().includes(q)) return true;
+  return false;
 }
 
 // ─────────────────────────────────────────────────────────── format helpers ──

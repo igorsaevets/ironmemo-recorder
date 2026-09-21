@@ -16,6 +16,14 @@
   <!-- I4b part 2: the IronMemo account this extension uses — none / guest from an earlier build / verified e-mail / lost -->
   <div id="account" class="account" hidden></div>
 
+  <div id="searchBar" class="search-bar" hidden>
+    <input type="text" id="searchInput" autocomplete="off" spellcheck="false">
+    <button id="searchClear" class="btn ghost search-clear" title="Clear" hidden>&times;</button>
+  </div>
+  <div id="searchEmpty" class="empty" hidden>
+    <div class="empty-title"></div>
+  </div>
+
   <div id="empty" class="empty" hidden>
     <div class="empty-title">No recordings yet</div>
     <div class="empty-hint">Click the extension icon in the Chrome toolbar, then Start recording.</div>
