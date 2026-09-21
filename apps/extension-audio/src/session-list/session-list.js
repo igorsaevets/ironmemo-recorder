@@ -250,6 +250,8 @@ function render(sessions) {
     $('empty').hidden = false;
     $('searchBar').hidden = true;
     $('searchEmpty').hidden = true;
+    $('searchInput').value = '';
+    $('searchClear').hidden = true;
     $('totalCount').textContent = '0';
     $('totalSize').textContent = '0 B';
     return;
@@ -840,6 +842,8 @@ async function handleAction(e, session, sessionEl) {
         $('empty').hidden = false;
         $('searchBar').hidden = true;
         $('searchEmpty').hidden = true;
+        $('searchInput').value = '';
+        $('searchClear').hidden = true;
         $('totalCount').textContent = '0';
         $('totalSize').textContent = '0 B';
       } else {
@@ -1464,6 +1468,7 @@ function handleRename(session, sessionEl) {
         try { await saveMeta(session.sid, { displayName: name }); }
         catch (e) { showStatus(`Could not save name: ${e?.message ?? e}`, 'error'); }
         rebuildSessionHead(session, sessionEl);
+        applyFilter($('searchInput').value);
       }
     }
   };
@@ -1516,6 +1521,7 @@ function wireSearch() {
     $('searchClear').hidden = !input.value;
   });
   $('searchClear').addEventListener('click', () => {
+    clearTimeout(filterTimer);
     input.value = '';
     $('searchClear').hidden = true;
     applyFilter('');
@@ -1524,6 +1530,7 @@ function wireSearch() {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && input.value) {
       e.preventDefault();
+      clearTimeout(filterTimer);
       input.value = '';
       $('searchClear').hidden = true;
       applyFilter('');
@@ -1544,6 +1551,11 @@ function applyFilter(query) {
     card.hidden = !match;
     if (match) shown++;
   });
+
+  if (activePlayer && q) {
+    const playerCard = $('list').querySelector(`.session[data-sid="${cssEscape(activePlayer.sid)}"]`);
+    if (playerCard && playerCard.hidden) stopPlayback();
+  }
 
   $('totalCount').textContent = (q && shown < total) ? `${shown} of ${total}` : String(total);
   $('totalSize').textContent = formatBytes([...sessionsById.values()].reduce((a, s) => a + s.bytes, 0));
