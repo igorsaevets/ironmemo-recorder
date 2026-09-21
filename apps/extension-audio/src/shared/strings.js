@@ -254,6 +254,10 @@ export const S = Object.freeze({
   trimEmpty: 'Selection contains no audio packets',
   trimError: (msg) => `Trim failed: ${msg}`,
   trimSelection: (dur) => `Selection: ${dur}`,
+
+  // ── rename (UF6a) ──
+  btnRename: 'Rename',
+  renamePlaceholder: 'Enter a name for this recording',
 });
 
 /** Popup: the one-time notice existing users see after the update (no consent bump — ADR-008 «Уточнения» 5). */

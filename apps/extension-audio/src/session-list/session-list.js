@@ -125,6 +125,7 @@ async function listSessions() {
     const files = [];
     let report = null;
     let recovery = null;
+    let meta = null;
     let journalFirstWall = null, journalLastWall = null, journalStoppedSeen = false;
 
     for await (const [name, fh] of dh.entries()) {
@@ -139,6 +140,10 @@ async function listSessions() {
       if (name === 'recovery.json') {
         try { recovery = JSON.parse(await f.text()); }
         catch (e) { console.warn('[session-list] recovery.json parse failed', sid, e); }
+      }
+      if (name === 'meta.json') {
+        try { meta = JSON.parse(await f.text()); }
+        catch (e) { console.warn('[session-list] meta.json parse failed', sid, e); }
       }
       if (name === 'journal.jsonl') {
         // Journal schema dualism: WebCodecs worker writes {t, wall, ...};
@@ -175,7 +180,7 @@ async function listSessions() {
         // MediaRecorder continuous:       <role>.000.NNNNNN.part
         if (f.name.startsWith(`${role}.`) && f.name.endsWith('.part')) { groups[role].parts.push(f); matched = true; break; }
       }
-      if (!matched && f.name !== 'capture-report.json' && f.name !== 'journal.jsonl' && f.name !== 'recovery.json' && !isTranscriptFile(f.name)) otherFiles.push(f);
+      if (!matched && f.name !== 'capture-report.json' && f.name !== 'journal.jsonl' && f.name !== 'recovery.json' && f.name !== 'meta.json' && !isTranscriptFile(f.name)) otherFiles.push(f);
     }
 
     // Sort .part chunks by segment/seq
@@ -228,7 +233,7 @@ async function listSessions() {
 
     const engine = report?.engine ?? null;
 
-    out.push({ sid, bytes, files, groups, otherFiles, transcriptFiles: files.filter((f) => isTranscriptFile(f.name)), startedAt, durationSec, status, engine, report, recovery });
+    out.push({ sid, bytes, files, groups, otherFiles, transcriptFiles: files.filter((f) => isTranscriptFile(f.name)), startedAt, durationSec, status, engine, report, recovery, displayName: meta?.displayName || null });
   }
 
   out.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
@@ -265,11 +270,17 @@ function renderSession(s) {
     ? `<span class="pill paused">${escapeHtml(S.badgePaused)}</span>`
     : '<span class="pill orphan">Interrupted without stop</span>';
   const engineTag = s.engine ? `<span class="tag">${escapeHtml(s.engine)}</span>` : '';
+  const hasName = !!s.displayName;
 
   el.innerHTML = `
     <div class="session-head">
       <div>
-        <div class="session-date">${dateStr}${badge}${engineTag}</div>
+        <div class="session-title-row">
+          ${hasName ? `<span class="session-title">${escapeHtml(s.displayName)}</span>` : `<span class="session-date">${dateStr}</span>`}
+          ${badge}${engineTag}
+          <button class="btn ghost rename-btn" data-action="rename" title="${escapeHtml(S.btnRename)}">${escapeHtml(S.btnRename)}</button>
+        </div>
+        ${hasName ? `<div class="session-date secondary">${dateStr}</div>` : ''}
         <div class="session-meta">Duration: ${duration} · On disk: ${formatBytes(s.bytes)}</div>
       </div>
       <div class="session-id">${s.sid.slice(0, 8)}…</div>
@@ -662,6 +673,7 @@ async function handleAction(e, session, sessionEl) {
   if (!btn) return;
   const action = btn.dataset.action;
 
+  if (action === 'rename') { handleRename(session, sessionEl); return; }
   if (action === 'transcribe') { await onTranscribeClick(session); return; }
   if (action === 'ingest-resume' || action === 'ingest-retry') {
     if (!ingest) return;
@@ -707,7 +719,7 @@ async function handleAction(e, session, sessionEl) {
     const original = btn.textContent;
     btn.disabled = true; btn.textContent = 'Downloading…';
     try {
-      await downloadLocal(session.sid, btn.dataset.file, btn.dataset.ext, session.startedAt);
+      await downloadLocal(session.sid, btn.dataset.file, btn.dataset.ext, session);
       btn.textContent = 'Done';
       setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1200);
     } catch (err) {
@@ -766,7 +778,7 @@ async function handleAction(e, session, sessionEl) {
     const ext = btn.dataset.ext;
     btn.disabled = true; btn.textContent = 'Downloading…';
     try {
-      await downloadFile(session.sid, file, roleKey, ext, session.startedAt);
+      await downloadFile(session.sid, file, roleKey, ext, session);
       btn.textContent = 'Done';
       setTimeout(() => { btn.disabled = false; btn.textContent = 'Download'; }, 1200);
     } catch (err) {
@@ -786,7 +798,7 @@ async function handleAction(e, session, sessionEl) {
     const original = btn.textContent;
     btn.disabled = true; btn.textContent = 'Assembling…';
     try {
-      await downloadParts(session.sid, roleKey, segment, parts, session.startedAt);
+      await downloadParts(session.sid, roleKey, segment, parts, session);
       btn.textContent = 'Done';
       setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1200);
     } catch (err) {
@@ -830,17 +842,17 @@ async function handleAction(e, session, sessionEl) {
   }
 }
 
-async function downloadFile(sid, name, roleKey, ext, startedAt) {
+async function downloadFile(sid, name, roleKey, ext, session) {
   const root = await navigator.storage.getDirectory();
   const sessionsDir = await root.getDirectoryHandle('sessions');
   const dh = await sessionsDir.getDirectoryHandle(sid);
   const fh = await dh.getFileHandle(name);
   const file = await fh.getFile();
 
-  const dateStr = startedAt ? new Date(startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-') : 'unknown';
+  const base = filenameBase(session);
   const roleSlug = ROLE_SLUG[roleKey] ?? roleKey;
   const suffix = name.includes('.recovered.') ? '-recovered' : '';
-  const filename = `IronMemo-${dateStr}-${roleSlug}${suffix}.${ext}`;
+  const filename = `${base}-${roleSlug}${suffix}.${ext}`;
 
   const url = URL.createObjectURL(file);
   const a = document.createElement('a');
@@ -851,7 +863,7 @@ async function downloadFile(sid, name, roleKey, ext, startedAt) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-async function downloadParts(sid, roleKey, segment, parts, startedAt) {
+async function downloadParts(sid, roleKey, segment, parts, session) {
   const root = await navigator.storage.getDirectory();
   const sessionsDir = await root.getDirectoryHandle('sessions');
   const dh = await sessionsDir.getDirectoryHandle(sid);
@@ -867,10 +879,10 @@ async function downloadParts(sid, roleKey, segment, parts, startedAt) {
   }
   const combined = new Blob(blobs, { type: 'audio/webm' });
 
-  const dateStr = startedAt ? new Date(startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-') : 'unknown';
+  const base = filenameBase(session);
   const roleSlug = ROLE_SLUG[roleKey] ?? roleKey;
   const segSuffix = segment && segment !== '000' ? `-seg${segment}` : '';
-  const filename = `IronMemo-${dateStr}-${roleSlug}${segSuffix}.webm`;
+  const filename = `${base}-${roleSlug}${segSuffix}.webm`;
 
   const url = URL.createObjectURL(combined);
   const a = document.createElement('a');
@@ -1035,11 +1047,11 @@ async function readSessionFileText(sid, name) {
 }
 
 /** transcript.v2.json → IronMemo-<date>-transcript.json, transcript.txt → …-transcript.txt, summary.md → …-summary.md, export.srt → …-transcript.srt */
-async function downloadLocal(sid, name, ext, startedAt) {
+async function downloadLocal(sid, name, ext, session) {
   const file = await (await (await sessionDirHandle(sid)).getFileHandle(name)).getFile();
-  const dateStr = startedAt ? new Date(startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-') : 'unknown';
-  const base = name === FILES.summary ? 'summary' : 'transcript';
-  const filename = `IronMemo-${dateStr}-${base}.${ext}`;
+  const base = filenameBase(session);
+  const kind = name === FILES.summary ? 'summary' : 'transcript';
+  const filename = `${base}-${kind}.${ext}`;
   const url = URL.createObjectURL(file);
   const a = document.createElement('a');
   a.href = url; a.download = filename;
@@ -1301,11 +1313,11 @@ async function exportTrim(session, sessionEl) {
     const result = await trimOggOpus(sid, fileName, startSec, endSec);
     if (result.packets === 0) throw new Error('output verification failed: no valid packets');
 
-    const dateStr = session.startedAt ? new Date(session.startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-') : 'unknown';
+    const base = filenameBase(session);
     const roleSlug = ROLE_SLUG[role] ?? role;
     const startTag = formatPlayerTime(startSec).replace(/:/g, '.');
     const endTag = formatPlayerTime(endSec).replace(/:/g, '.');
-    const filename = `IronMemo-${dateStr}-${roleSlug}-trim-${startTag}-${endTag}.opus`;
+    const filename = `${base}-${roleSlug}-trim-${startTag}-${endTag}.opus`;
 
     const blob = new Blob([result.bytes], { type: 'audio/ogg; codecs=opus' });
     const url = URL.createObjectURL(blob);
@@ -1374,6 +1386,108 @@ async function trimOggOpus(sid, fileName, startSec, endSec) {
   for (const c of chunks) { out.set(c, off); off += c.length; }
 
   return { bytes: out, packets: selected.length, durationSec: selected.reduce((a, p) => a + p.samples, 0) / 48000 };
+}
+
+// ── UF6a: display name ──────────────────────────────────────────────────────── //
+
+function sanitizeFileName(name) {
+  if (!name) return null;
+  const clean = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim();
+  return clean.slice(0, 60) || null;
+}
+
+function filenameBase(session) {
+  const safe = sanitizeFileName(session?.displayName);
+  if (safe) return `IronMemo-${safe}`;
+  const dateStr = session?.startedAt
+    ? new Date(session.startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-')
+    : 'unknown';
+  return `IronMemo-${dateStr}`;
+}
+
+async function saveMeta(sid, patch) {
+  const dh = await sessionDirHandle(sid);
+  let existing = {};
+  try {
+    const fh = await dh.getFileHandle('meta.json');
+    existing = JSON.parse(await (await fh.getFile()).text());
+  } catch {}
+  const merged = { ...existing, ...patch };
+  if (merged.displayName === null || merged.displayName === '') delete merged.displayName;
+  const fh = await dh.getFileHandle('meta.json', { create: true });
+  const writable = await fh.createWritable();
+  await writable.write(JSON.stringify(merged));
+  await writable.close();
+}
+
+function handleRename(session, sessionEl) {
+  const row = sessionEl.querySelector('.session-title-row');
+  if (!row || row.querySelector('.rename-input')) return;
+
+  const children = [...row.children];
+  children.forEach((c) => { c.dataset.preRenameHidden = c.hidden ?? false; c.hidden = true; });
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'rename-input';
+  input.value = session.displayName || '';
+  input.placeholder = S.renamePlaceholder;
+  input.maxLength = 100;
+  row.prepend(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    input.remove();
+    children.forEach((c) => { c.hidden = c.dataset.preRenameHidden === 'true'; delete c.dataset.preRenameHidden; });
+
+    if (save) {
+      const name = input.value.trim() || null;
+      if (name !== session.displayName) {
+        session.displayName = name;
+        try { await saveMeta(session.sid, { displayName: name }); }
+        catch (e) { showStatus(`Could not save name: ${e?.message ?? e}`, 'error'); }
+        rebuildSessionHead(session, sessionEl);
+      }
+    }
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+function rebuildSessionHead(s, sessionEl) {
+  const leftDiv = sessionEl.querySelector('.session-head > div:first-child');
+  if (!leftDiv) return;
+
+  const date = s.startedAt ? new Date(s.startedAt) : null;
+  const dateStr = date ? formatDate(date) : '—';
+  const duration = s.durationSec != null ? formatDuration(s.durationSec) : '—';
+  const badge = s.status === 'ok'
+    ? '<span class="pill ok">Completed</span>'
+    : s.status === 'recording'
+    ? `<span class="pill recording">${escapeHtml(S.badgeRecording)}</span>`
+    : s.status === 'paused'
+    ? `<span class="pill paused">${escapeHtml(S.badgePaused)}</span>`
+    : '<span class="pill orphan">Interrupted without stop</span>';
+  const engineTag = s.engine ? `<span class="tag">${escapeHtml(s.engine)}</span>` : '';
+  const hasName = !!s.displayName;
+
+  leftDiv.innerHTML = `
+    <div class="session-title-row">
+      ${hasName ? `<span class="session-title">${escapeHtml(s.displayName)}</span>` : `<span class="session-date">${dateStr}</span>`}
+      ${badge}${engineTag}
+      <button class="btn ghost rename-btn" data-action="rename" title="${escapeHtml(S.btnRename)}">${escapeHtml(S.btnRename)}</button>
+    </div>
+    ${hasName ? `<div class="session-date secondary">${dateStr}</div>` : ''}
+    <div class="session-meta">Duration: ${duration} · On disk: ${formatBytes(s.bytes)}</div>
+  `;
 }
 
 // ─────────────────────────────────────────────────────────── format helpers ──
