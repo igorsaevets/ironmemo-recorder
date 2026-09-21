@@ -25,6 +25,14 @@ import { buildDiagnostics } from '../ingest/diag.js';
 
 const $ = (id) => document.getElementById(id);
 
+const CAPTURE_STATE_KEY = 'ironmemo.captureState.v1';
+let captureState = { status: 'idle', sessionId: null };
+
+async function isCaptureActive(sid) {
+  const fresh = (await chrome.storage.local.get(CAPTURE_STATE_KEY))[CAPTURE_STATE_KEY] ?? { status: 'idle', sessionId: null };
+  return fresh.sessionId === sid && (fresh.status === 'recording' || fresh.status === 'paused');
+}
+
 const ROLES = ['compatibility_mix', 'local_mic', 'remote_tab']; // longest-first for prefix matching
 
 const ROLE_LABEL = {
@@ -54,6 +62,17 @@ boot().catch((e) => showStatus(`Failed to load the list: ${e?.message ?? e}`, 'e
 
 async function boot() {
   $('refresh').addEventListener('click', () => refresh().catch((e) => showStatus(e.message, 'error')));
+  const stored = await chrome.storage.local.get(CAPTURE_STATE_KEY);
+  captureState = stored[CAPTURE_STATE_KEY] ?? { status: 'idle', sessionId: null };
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes[CAPTURE_STATE_KEY]) {
+      const prev = captureState;
+      captureState = changes[CAPTURE_STATE_KEY].newValue ?? { status: 'idle', sessionId: null };
+      if (captureState.status !== prev.status || captureState.sessionId !== prev.sessionId) {
+        refresh().catch((e) => showStatus(e.message, 'error'));
+      }
+    }
+  });
   settings = await loadSettings();
   if (getByPath(settings, 'upload.enabled') !== false) {
     try {
@@ -193,8 +212,13 @@ async function listSessions() {
       if (rolesWithData > 0) durationSec = bytes / (BYTES_PER_SEC_PER_ROLE * rolesWithData);
     }
 
-    // Status: capture-report.final:true → штатно, else журнал session_stopped → штатно, else orphan
-    const status = (report?.final === true || journalStoppedSeen) ? 'ok' : 'orphan';
+    // Active capture overrides file-based status — without this, a live recording shows "Interrupted"
+    let status;
+    if (captureState.sessionId === sid && (captureState.status === 'recording' || captureState.status === 'paused')) {
+      status = captureState.status;
+    } else {
+      status = (report?.final === true || journalStoppedSeen) ? 'ok' : 'orphan';
+    }
 
     const engine = report?.engine ?? null;
 
@@ -226,8 +250,13 @@ function renderSession(s) {
   const date = s.startedAt ? new Date(s.startedAt) : null;
   const dateStr = date ? formatDate(date) : '—';
   const duration = s.durationSec != null ? formatDuration(s.durationSec) : '—';
+  const isCapturing = s.status === 'recording' || s.status === 'paused';
   const badge = s.status === 'ok'
     ? '<span class="pill ok">Completed</span>'
+    : s.status === 'recording'
+    ? `<span class="pill recording">${escapeHtml(S.badgeRecording)}</span>`
+    : s.status === 'paused'
+    ? `<span class="pill paused">${escapeHtml(S.badgePaused)}</span>`
     : '<span class="pill orphan">Interrupted without stop</span>';
   const engineTag = s.engine ? `<span class="tag">${escapeHtml(s.engine)}</span>` : '';
 
@@ -242,7 +271,7 @@ function renderSession(s) {
     <div class="roles"></div>
     <div class="ingest" hidden></div>
     <div class="session-actions">
-      <button class="btn danger" data-action="delete">Delete session</button>
+      ${isCapturing ? '' : '<button class="btn danger" data-action="delete">Delete session</button>'}
     </div>
   `;
 
@@ -359,13 +388,14 @@ function renderIngest(el, s) {
   const st = job?.state ?? null;
   const id8 = job?.recordingId ? job.recordingId.slice(0, 8) : '';
 
+  const sessionCapturing = s.status === 'recording' || s.status === 'paused';
   if (!job || (st === 'cancelled' && !job.recordingId)) {
     status = S.idleStatus; hint = escapeHtml(S.idleHint);
-    buttons.push(['transcribe', S.btnTranscribe, 'primary']);
+    if (!sessionCapturing) buttons.push(['transcribe', S.btnTranscribe, 'primary']);
   } else if (st === 'cancelled') {
     status = job.stateReason === 'local_deleted' ? S.cancelledLocalDeleted : S.cancelled;
     hint = escapeHtml(S.cancelledServerRemain(id8));
-    buttons.push(['transcribe', S.btnTranscribeAgain, '']);
+    if (!sessionCapturing) buttons.push(['transcribe', S.btnTranscribeAgain, '']);
   } else if (st === 'session' || st === 'creating' || st === 'finalizing') {
     status = S.stateText[st];
     if (job.stateReason === 'workspace_wait') hint = escapeHtml(S.workspaceWait);
@@ -421,7 +451,7 @@ function renderIngest(el, s) {
       hint += ` <a href="${escapeHtml(job.meetingPage)}" target="_blank" rel="noopener">${escapeHtml(S.openOnIronMemo)}</a> ${escapeHtml(S.openCaveat)}`;
     }
     if (job.recordingId && !job.serverDeleted && !job.authLost && !running) buttons.push(['delete-server', S.btnDeleteServer, 'danger']);
-    if (job.serverDeleted) buttons.push(['transcribe', S.btnTranscribeAgain, '']);
+    if (job.serverDeleted && !sessionCapturing) buttons.push(['transcribe', S.btnTranscribeAgain, '']);
   } else if (st === 'error') {
     cls = 'error';
     const r = job.stateReason;
@@ -564,6 +594,7 @@ function wireConsentDialog() {
       hideConsent();
       const s = pendingConsentSession; pendingConsentSession = null;
       if (!granted) { showStatus(S.notGrantedRetry, 'error'); if (s) rerender(s.sid); return; }
+      if (s && await isCaptureActive(s.sid)) { showStatus(S.transcribeBlockedActive, 'error'); if (s) rerender(s.sid); return; }
       if (s && await ingest.needsEmail()) { showClaim({ reason: 'transcribe', session: s, after: () => startIngest(s) }); return; } // product rule «б»: the e-mail before the first upload
       if (s) await startIngest(s);
     } catch (e) {
@@ -583,6 +614,10 @@ function hideConsent() { $('cloudConsent').hidden = true; }
 
 async function onTranscribeClick(session) {
   if (!ingest) return;
+  if (captureState.sessionId === session.sid && (captureState.status === 'recording' || captureState.status === 'paused')) {
+    showStatus(S.transcribeBlockedActive, 'error');
+    return;
+  }
   if (!ingest.hasConsent()) { showConsent(session); return; }
   const granted = await ingest.requestPermission(); // first await → still inside the gesture
   if (!granted) { showStatus(S.notGranted, 'error'); return; }
@@ -723,12 +758,20 @@ async function handleAction(e, session, sessionEl) {
   }
 
   if (action === 'delete') {
+    if (await isCaptureActive(session.sid)) {
+      showStatus(S.deleteBlockedActive, 'error');
+      return;
+    }
     const job = ingest?.getJob(session.sid);
     const active = job && (ingest.isRunning(session.sid) || ['session', 'creating', 'uploading', 'finalizing', 'finalize_unknown', 'processing', 'paused', 'create_unknown'].includes(job.state));
     const question = active
       ? S.confirmDeleteLocalActive
-      : S.confirmDeleteLocal(sessionEl.querySelector('.session-date').textContent.replace(/Completed|Interrupted without stop/, '').trim());
+      : S.confirmDeleteLocal(sessionEl.querySelector('.session-date').textContent.replace(/Completed|Interrupted without stop|Recording now|Paused/, '').trim());
     if (!confirm(question)) return;
+    if (await isCaptureActive(session.sid)) {
+      showStatus(S.deleteBlockedActive, 'error');
+      return;
+    }
     btn.disabled = true; btn.textContent = 'Deleting…';
     try {
       if (ingest) await ingest.onSessionDeleted(session.sid); // stop + tombstone BEFORE the directory goes

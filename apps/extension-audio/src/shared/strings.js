@@ -229,6 +229,10 @@ export const S = Object.freeze({
   downloadFailed: (msg) => `Download failed: ${msg}`,
   confirmDeleteLocalActive: 'An upload to IronMemo is in progress for this recording. Deleting stops it and cannot be undone. Continue?',
   confirmDeleteLocal: (date) => `Delete session from ${date}? Audio and transcript files in this browser cannot be recovered (the server copy, if any, stays on IronMemo).`,
+  badgeRecording: 'Recording now',
+  badgePaused: 'Paused',
+  deleteBlockedActive: 'Cannot delete — this recording is still in progress. Stop the recording first.',
+  transcribeBlockedActive: 'Cannot transcribe — recording is still in progress. Stop the recording first.',
 });
 
 /** Popup: the one-time notice existing users see after the update (no consent bump — ADR-008 «Уточнения» 5). */
