@@ -941,7 +941,7 @@ async function startPlayback(sid, roleKey, fileName, sessionEl) {
   audio.addEventListener('timeupdate', () => updatePlayerTime());
   audio.addEventListener('play', () => updatePlayerButtons());
   audio.addEventListener('pause', () => updatePlayerButtons());
-  audio.addEventListener('ended', () => updatePlayerDisplay());
+  audio.addEventListener('ended', () => { if (trimState) trimState.previewing = false; updatePlayerDisplay(); });
   audio.addEventListener('error', () => {
     if (mySeq !== playSeq) return;
     showStatus(S.playerError(audio.error?.message || 'unsupported format'), 'error');
@@ -1249,15 +1249,17 @@ async function onClaimVerify() {
 
 function enterTrimMode() {
   if (!activePlayer || !isFinite(activePlayer.audio.duration) || activePlayer.audio.duration <= 0) return;
-  trimState = { startSec: 0, endSec: activePlayer.audio.duration, previewing: false };
+  if (trimState) { exitTrimMode(); return; }
+  trimState = { startSec: 0, endSec: activePlayer.audio.duration, previewing: false, exporting: false };
   renderTrimBar();
 }
 
 function exitTrimMode() {
   if (!trimState) return;
+  if (trimState.previewing && activePlayer?.audio) activePlayer.audio.pause();
   trimState = null;
   const bar = activePlayer?.el?.closest('.session')?.querySelector('.trim-bar');
-  if (bar) bar.hidden = true;
+  if (bar) { bar.innerHTML = ''; bar.hidden = true; }
 }
 
 function renderTrimBar() {
@@ -1285,22 +1287,24 @@ function previewTrim() {
 }
 
 async function exportTrim(session, sessionEl) {
-  if (!activePlayer || !trimState) return;
+  if (!activePlayer || !trimState || trimState.exporting) return;
   if (trimState.startSec >= trimState.endSec) { showStatus(S.trimInvalidRange, 'error'); return; }
+
+  const { sid, fileName, role } = activePlayer;
+  const { startSec, endSec } = trimState;
+  trimState.exporting = true;
 
   const btn = sessionEl.querySelector('[data-action="trim-export"]');
   if (btn) { btn.disabled = true; btn.textContent = S.trimExporting; }
 
   try {
-    const result = await trimOggOpus(activePlayer.sid, activePlayer.fileName, trimState.startSec, trimState.endSec);
-
-    const verified = demuxOggOpus(result.bytes);
-    if (!verified.opusHead || verified.packets.length === 0) throw new Error('output verification failed: no valid packets');
+    const result = await trimOggOpus(sid, fileName, startSec, endSec);
+    if (result.packets === 0) throw new Error('output verification failed: no valid packets');
 
     const dateStr = session.startedAt ? new Date(session.startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-') : 'unknown';
-    const roleSlug = ROLE_SLUG[activePlayer.role] ?? activePlayer.role;
-    const startTag = formatPlayerTime(trimState.startSec).replace(/:/g, '.');
-    const endTag = formatPlayerTime(trimState.endSec).replace(/:/g, '.');
+    const roleSlug = ROLE_SLUG[role] ?? role;
+    const startTag = formatPlayerTime(startSec).replace(/:/g, '.');
+    const endTag = formatPlayerTime(endSec).replace(/:/g, '.');
     const filename = `IronMemo-${dateStr}-${roleSlug}-trim-${startTag}-${endTag}.opus`;
 
     const blob = new Blob([result.bytes], { type: 'audio/ogg; codecs=opus' });
@@ -1316,6 +1320,8 @@ async function exportTrim(session, sessionEl) {
   } catch (e) {
     showStatus(S.trimError(e?.message ?? String(e)), 'error');
     if (btn) { btn.disabled = false; btn.textContent = S.trimExportSelection; }
+  } finally {
+    if (trimState) trimState.exporting = false;
   }
 }
 
@@ -1333,10 +1339,14 @@ async function trimOggOpus(sid, fileName, startSec, endSec) {
 
   let pos = 0;
   const selected = [];
+  let startsAtBeginning = true;
   for (const pkt of d.packets) {
     const dur = opusPacketSamples(pkt.data);
     const pktEnd = pos + dur;
-    if (pktEnd > startSample && pos < endSample) selected.push({ data: pkt.data, samples: dur });
+    if (pktEnd > startSample && pos < endSample) {
+      if (selected.length === 0 && pos > 0) startsAtBeginning = false;
+      selected.push({ data: new Uint8Array(pkt.data), samples: dur });
+    }
     pos += dur;
     if (pos >= endSample) break;
   }
@@ -1345,7 +1355,7 @@ async function trimOggOpus(sid, fileName, startSec, endSec) {
 
   const mux = new OggOpusMuxer({
     channels: d.opusHead.channels,
-    preSkip: d.opusHead.preSkip,
+    preSkip: startsAtBeginning ? d.opusHead.preSkip : 0,
     inputSampleRate: d.opusHead.inputSampleRate,
     comments: [`ENCODER=IronMemo Trim (lossless packet copy, ${selected.length} packets)`],
   });
