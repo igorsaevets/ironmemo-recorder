@@ -57,6 +57,8 @@ let settings = null;
 let sessionsById = new Map();
 let pendingConsentSession = null;  // the session whose Transcribe click opened the disclosure
 let accountState = { hasAccount: false, kind: null, lost: null, emailMasked: null }; // mirrors ingest.accountStatus() for rendering
+let activePlayer = null;           // UF3: { audio, blobUrl, sid, role, el, seeking }
+let playSeq = 0;                   // monotonic counter — guards against rapid-click races in startPlayback
 
 boot().catch((e) => showStatus(`Failed to load the list: ${e?.message ?? e}`, 'error'));
 
@@ -93,6 +95,7 @@ async function boot() {
       ingest = null;
     }
   }
+  window.addEventListener('pagehide', () => stopPlayback());
   $('copyDiag').addEventListener('click', () => copyDiagnostics());
   await renderAccount(); // before the list: the waiting-long hint reads accountState
   await refresh();
@@ -101,6 +104,7 @@ async function boot() {
 }
 
 async function refresh() {
+  stopPlayback();
   const sessions = await listSessions();
   sessionsById = new Map(sessions.map((s) => [s.sid, s]));
   render(sessions);
@@ -269,6 +273,7 @@ function renderSession(s) {
       <div class="session-id">${s.sid.slice(0, 8)}…</div>
     </div>
     <div class="roles"></div>
+    <div class="player-bar" hidden></div>
     <div class="ingest" hidden></div>
     <div class="session-actions">
       ${isCapturing ? '' : '<button class="btn danger" data-action="delete">Delete session</button>'}
@@ -321,6 +326,7 @@ function renderRoleRow(role, g) {
       <div class="role-name">${escapeHtml(label)}</div>
       <div class="role-size">${formatBytes(f.size)}</div>
       <div class="role-actions">
+        ${f.size > 0 ? `<button class="btn" data-action="play" data-role="${role}" data-file="${escapeHtml(f.name)}" aria-label="${escapeHtml(S.btnPlay)} ${escapeHtml(label)}">${escapeHtml(S.btnPlay)}</button>` : ''}
         <button class="btn" data-action="download-file" data-role="${role}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">Download</button>
       </div>
     `;
@@ -334,6 +340,7 @@ function renderRoleRow(role, g) {
       <div class="role-name">${escapeHtml(label)} <span class="tag warn">recovered</span></div>
       <div class="role-size">${formatBytes(f.size)}</div>
       <div class="role-actions">
+        ${f.size > 0 ? `<button class="btn" data-action="play" data-role="${role}" data-file="${escapeHtml(f.name)}" aria-label="${escapeHtml(S.btnPlay)} ${escapeHtml(label)}">${escapeHtml(S.btnPlay)}</button>` : ''}
         <button class="btn" data-action="download-file" data-role="${role}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">Download</button>
       </div>
     `;
@@ -721,6 +728,27 @@ async function handleAction(e, session, sessionEl) {
     rerender(session.sid); return;
   }
 
+  if (action === 'play') {
+    const roleKey = btn.dataset.role;
+    const fileName = btn.dataset.file;
+    if (activePlayer && activePlayer.sid === session.sid && activePlayer.role === roleKey) {
+      if (activePlayer.audio.paused || activePlayer.audio.ended) activePlayer.audio.play().catch(() => {});
+      else activePlayer.audio.pause();
+      updatePlayerDisplay();
+      return;
+    }
+    await startPlayback(session.sid, roleKey, fileName, sessionEl);
+    return;
+  }
+  if (action === 'player-toggle') {
+    if (!activePlayer) return;
+    if (activePlayer.audio.paused || activePlayer.audio.ended) activePlayer.audio.play().catch(() => {});
+    else activePlayer.audio.pause();
+    updatePlayerDisplay();
+    return;
+  }
+  if (action === 'player-stop') { stopPlayback(); return; }
+
   if (action === 'download-file') {
     const file = btn.dataset.file;
     const roleKey = btn.dataset.role;
@@ -772,6 +800,7 @@ async function handleAction(e, session, sessionEl) {
       showStatus(S.deleteBlockedActive, 'error');
       return;
     }
+    if (activePlayer && activePlayer.sid === session.sid) stopPlayback();
     btn.disabled = true; btn.textContent = 'Deleting…';
     try {
       if (ingest) await ingest.onSessionDeleted(session.sid); // stop + tombstone BEFORE the directory goes
@@ -845,6 +874,134 @@ async function deleteSession(sid) {
   const root = await navigator.storage.getDirectory();
   const sessionsDir = await root.getDirectoryHandle('sessions');
   await sessionsDir.removeEntry(sid, { recursive: true });
+}
+
+// ── UF3: inline audio player ──
+
+async function startPlayback(sid, roleKey, fileName, sessionEl) {
+  stopPlayback();
+  const mySeq = ++playSeq;
+
+  let file;
+  try {
+    const dh = await sessionDirHandle(sid);
+    const fh = await dh.getFileHandle(fileName);
+    file = await fh.getFile();
+  } catch (e) {
+    showStatus(S.playerError(e?.message || 'file not found'), 'error');
+    return;
+  }
+  if (mySeq !== playSeq) return;
+  if (file.size === 0) { showStatus(S.playerError('file is empty'), 'error'); return; }
+
+  const blobUrl = URL.createObjectURL(file);
+  if (mySeq !== playSeq) { URL.revokeObjectURL(blobUrl); return; }
+
+  const audio = new Audio(blobUrl);
+  const playerBar = sessionEl.querySelector('.player-bar');
+  activePlayer = { audio, blobUrl, sid, role: roleKey, el: playerBar, seeking: false };
+
+  const label = ROLE_LABEL[roleKey] ?? roleKey;
+  playerBar.innerHTML = `
+    <button class="btn" data-action="player-toggle" aria-label="${escapeHtml(S.btnPause)}">${escapeHtml(S.btnPause)}</button>
+    <span class="player-time"><span data-role="current">0:00</span> / <span data-role="total">${escapeHtml(S.playerDurationUnknown)}</span></span>
+    <input type="range" class="player-seek" min="0" max="100" value="0" step="0.1" aria-label="Seek">
+    <span class="player-label">${escapeHtml(label)}</span>
+    <button class="btn ghost" data-action="player-stop" aria-label="${escapeHtml(S.playerStop)}">&times;</button>
+  `;
+  playerBar.hidden = false;
+
+  const seek = playerBar.querySelector('.player-seek');
+  seek.disabled = true;
+  seek.addEventListener('mousedown', () => { if (activePlayer) activePlayer.seeking = true; });
+  seek.addEventListener('touchstart', () => { if (activePlayer) activePlayer.seeking = true; }, { passive: true });
+  seek.addEventListener('input', () => {
+    if (activePlayer && !seek.disabled) { activePlayer.audio.currentTime = parseFloat(seek.value); updatePlayerTime(); }
+  });
+  const endSeek = () => { if (activePlayer) activePlayer.seeking = false; };
+  window.addEventListener('mouseup', endSeek);
+  window.addEventListener('touchend', endSeek);
+  activePlayer._cleanupSeek = () => { window.removeEventListener('mouseup', endSeek); window.removeEventListener('touchend', endSeek); };
+
+  audio.addEventListener('loadedmetadata', () => updatePlayerDisplay());
+  audio.addEventListener('durationchange', () => updatePlayerDisplay());
+  audio.addEventListener('timeupdate', () => updatePlayerTime());
+  audio.addEventListener('play', () => updatePlayerButtons());
+  audio.addEventListener('pause', () => updatePlayerButtons());
+  audio.addEventListener('ended', () => updatePlayerDisplay());
+  audio.addEventListener('error', () => {
+    if (mySeq !== playSeq) return;
+    showStatus(S.playerError(audio.error?.message || 'unsupported format'), 'error');
+    stopPlayback();
+  });
+
+  try { await audio.play(); updatePlayerDisplay(); }
+  catch (e) {
+    if (e?.name === 'AbortError') return;
+    if (mySeq !== playSeq) return;
+    showStatus(S.playerError(e?.message ?? String(e)), 'error');
+    stopPlayback();
+  }
+}
+
+function stopPlayback() {
+  if (!activePlayer) return;
+  const { audio, blobUrl, el, role, _cleanupSeek } = activePlayer;
+  if (_cleanupSeek) _cleanupSeek();
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
+  URL.revokeObjectURL(blobUrl);
+  if (el) el.hidden = true;
+  const sessionEl = el?.closest('.session');
+  if (sessionEl) {
+    const btn = sessionEl.querySelector(`button[data-action="play"][data-role="${role}"]`);
+    if (btn) btn.textContent = S.btnPlay;
+  }
+  activePlayer = null;
+}
+
+function updatePlayerDisplay() {
+  if (!activePlayer) return;
+  const { audio, el } = activePlayer;
+  const seek = el.querySelector('.player-seek');
+  if (seek && isFinite(audio.duration) && audio.duration > 0) { seek.max = audio.duration; seek.disabled = false; }
+  updatePlayerTime();
+  updatePlayerButtons();
+}
+
+function updatePlayerTime() {
+  if (!activePlayer) return;
+  const { audio, el, seeking } = activePlayer;
+  const cur = el.querySelector('[data-role="current"]');
+  const tot = el.querySelector('[data-role="total"]');
+  const seek = el.querySelector('.player-seek');
+  if (cur) cur.textContent = formatPlayerTime(audio.currentTime);
+  if (tot) tot.textContent = isFinite(audio.duration) ? formatPlayerTime(audio.duration) : S.playerDurationUnknown;
+  if (seek && isFinite(audio.duration) && audio.duration > 0 && !seeking) seek.value = audio.currentTime;
+}
+
+function updatePlayerButtons() {
+  if (!activePlayer) return;
+  const { audio, el, role } = activePlayer;
+  const paused = audio.paused || audio.ended;
+  const toggleBtn = el.querySelector('[data-action="player-toggle"]');
+  if (toggleBtn) toggleBtn.textContent = paused ? S.btnPlay : S.btnPause;
+  const sessionEl = el.closest('.session');
+  if (sessionEl) {
+    const roleBtn = sessionEl.querySelector(`button[data-action="play"][data-role="${role}"]`);
+    if (roleBtn) roleBtn.textContent = paused ? S.btnPlay : S.btnPause;
+  }
+}
+
+function formatPlayerTime(sec) {
+  if (!isFinite(sec) || sec < 0) return '0:00';
+  const s = Math.floor(sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (h) return `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  return `${m}:${String(ss).padStart(2, '0')}`;
 }
 
 // ── I4b: local transcript files ──

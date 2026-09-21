@@ -233,6 +233,12 @@ export const S = Object.freeze({
   badgePaused: 'Paused',
   deleteBlockedActive: 'Cannot delete — this recording is still in progress. Stop the recording first.',
   transcribeBlockedActive: 'Cannot transcribe — recording is still in progress. Stop the recording first.',
+
+  // ── player (UF3) ──
+  btnPlay: 'Play',
+  playerStop: 'Close player',
+  playerDurationUnknown: '—',
+  playerError: (msg) => `Cannot play: ${msg}`,
 });
 
 /** Popup: the one-time notice existing users see after the update (no consent bump — ADR-008 «Уточнения» 5). */
