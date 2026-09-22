@@ -104,7 +104,9 @@ async function boot() {
   await renderAccount(); // before the list: the waiting-long hint reads accountState
   await refresh();
   focusHashSession(); // I4b task 4: the popup's line opens this page on #sid=<session>
-  if (ingest) ingest.resumeAll().catch((e) => console.warn('[session-list] resume failed', e));
+  if (ingest && !new URLSearchParams(location.search).has('readonly')) {
+    ingest.resumeAll().catch((e) => console.warn('[session-list] resume failed', e));
+  }
 }
 
 async function refresh() {
