@@ -176,7 +176,7 @@ export class IngestController {
     if (existing && this.running.has(sid)) return existing;
     if (existing?.state === 'completed') return existing;
 
-    const lease = await ledger.acquireLease(sid, this.owner);
+    const lease = await ledger.acquireLease(sid);
     if (!lease.ok) throw new Error('Another Recordings tab is already handling this recording.');
 
     let job;
@@ -188,7 +188,7 @@ export class IngestController {
       job = this.newJob(session, asset);
     }
     await ledger.putJob(job); this.jobs.set(sid, job); this.emit(sid);
-    return this.run(sid);
+    return this.run(sid, lease.release);
   }
 
   newJob(session, asset) {
@@ -218,9 +218,7 @@ export class IngestController {
 
   /**
    * Resume every unfinished job (page open / extension reload). Needs consent + permission.
-   * A job whose lease is still held by a page that just closed (lease younger than
-   * LEASE_TTL_MS) is retried after the TTL — measured in the bench: without this retry a
-   * reopened Recordings page sat on an `uploading` job forever.
+   * Web Locks release instantly on page close, so blocked leases resolve quickly.
    */
   async resumeAll() {
     if (!this.hasConsent() || !(await this.hasPermission())) return [];
@@ -230,9 +228,9 @@ export class IngestController {
     for (const job of [...this.jobs.values()]) {
       if (job.localDeleted || !RESUMABLE.has(job.state) || this.running.has(job.sessionId)) continue;
       if (job.state === 'creating') { job.state = 'create_unknown'; job.stateReason = 'page_closed_during_create'; await ledger.putJob(job); }
-      const lease = await ledger.acquireLease(job.sessionId, this.owner);
-      if (!lease.ok) { blocked = true; this.log('resume_lease_busy', { sid: job.sessionId, ageMs: Date.now() - (lease.at ?? 0) }); continue; }
-      out.push(this.run(job.sessionId));
+      const lease = await ledger.acquireLease(job.sessionId);
+      if (!lease.ok) { blocked = true; this.log('resume_lease_busy', { sid: job.sessionId }); continue; }
+      out.push(this.run(job.sessionId, lease.release));
     }
     // I4b: completed jobs — fetch a transcript that is not stored yet (jobs finished by an
     // earlier version, or a failed fetch), and re-check the server revision once an hour.
@@ -244,14 +242,14 @@ export class IngestController {
       if (needFetch || needCheck) out.push(this.syncCompleted(job.sessionId));
     }
     if (blocked && !this.resumeTimer) {
-      this.resumeTimer = setTimeout(() => { this.resumeTimer = null; this.resumeAll().catch(() => {}); }, ledger.LEASE_TTL_MS + 1000);
+      this.resumeTimer = setTimeout(() => { this.resumeTimer = null; this.resumeAll().catch(() => {}); }, 5000);
     }
     return Promise.all(out);
   }
 
-  /** Best-effort on pagehide: let the next page take over without waiting for the lease TTL. */
+  /** Best-effort on pagehide: release all held Web Locks so the next page can take over immediately. */
   releaseAllLeases() {
-    for (const sid of this.running.keys()) ledger.releaseLease(sid, this.owner).catch(() => {});
+    for (const [, entry] of this.running) { if (typeof entry.release === 'function') entry.release(); }
   }
 
   async pause(sid, reason = 'user') {
@@ -277,7 +275,7 @@ export class IngestController {
     const job = this.jobs.get(sid);
     if (!job || this.running.has(sid)) return job ?? null;
     if (job.state === 'paused' || job.state === 'error' || job.state === 'create_unknown' || job.state === 'finalize_unknown') {
-      const lease = await ledger.acquireLease(sid, this.owner);
+      const lease = await ledger.acquireLease(sid);
       if (!lease.ok) throw new Error('Another Recordings tab is already handling this recording.');
       if (job.state === 'paused') { job.state = job.pausedFrom ?? (job.uploadId ? 'uploading' : 'session'); job.pausedFrom = null; }
       else if (job.state === 'error') {
@@ -289,6 +287,7 @@ export class IngestController {
       }
       job.stateReason = null;
       await ledger.putJob(job); this.jobs.set(sid, job); this.emit(sid);
+      return this.run(sid, lease.release);
     }
     return this.run(sid);
   }
@@ -318,12 +317,16 @@ export class IngestController {
   }
 
   // ── the state machine ────────────────────────────────────────────────────────────────
-  async run(sid) {
+  async run(sid, release = null) {
     if (this.running.has(sid)) return this.jobs.get(sid);
+    if (!release) {
+      const lease = await ledger.acquireLease(sid);
+      if (!lease.ok) return this.jobs.get(sid);
+      release = lease.release;
+    }
     const abort = new AbortController();
     const signal = abort.signal;
-    this.running.set(sid, { abort });
-    const leaseTimer = setInterval(() => ledger.renewLease(sid, this.owner).catch(() => {}), 5000);
+    this.running.set(sid, { abort, release });
     const log = this.log;
     const save = async (job) => { this.jobs.set(sid, job); await ledger.putJob(job); this.emit(sid); };
     let job = this.jobs.get(sid);
@@ -410,9 +413,8 @@ export class IngestController {
       log('job_failed', { sid, state: job.state, reason: job.stateReason, kind: e.kind ?? e.name, status: e.status ?? null, message: e.message });
       return job;
     } finally {
-      clearInterval(leaseTimer);
-      this.running.delete(sid);
-      await ledger.releaseLease(sid, this.owner).catch(() => {});
+      const entry = this.running.get(sid);
+      if (entry?.abort === abort) { this.running.delete(sid); if (entry.release) entry.release(); }
       this.emit(sid);
     }
   }
@@ -520,11 +522,11 @@ export class IngestController {
   async syncCompleted(sid) {
     const job = this.jobs.get(sid);
     if (!job || job.state !== 'completed' || this.running.has(sid)) return job ?? null;
-    const lease = await ledger.acquireLease(sid, this.owner);
+    const lease = await ledger.acquireLease(sid);
     if (!lease.ok) return job;
     const abort = new AbortController();
     const signal = abort.signal;
-    this.running.set(sid, { abort });
+    this.running.set(sid, { abort, release: lease.release });
     const save = async (j) => { this.jobs.set(sid, j); await ledger.putJob(j); this.emit(sid); };
     try {
       let rec;
@@ -565,8 +567,9 @@ export class IngestController {
           this.log('reprocess_detected', { sid, status: rec.status });
           job.state = 'processing'; job.stateReason = null; job.timings.processingSince = Date.now();
           await save(job);
-          this.running.delete(sid); await ledger.releaseLease(sid, this.owner).catch(() => {});
-          return this.run(sid);
+          const transferred = this.running.get(sid)?.release;
+          this.running.delete(sid);
+          return this.run(sid, transferred);
         }
         job.transcript = { ...(job.transcript ?? {}), checkedAt: Date.now() };
         await save(job); return job;
@@ -595,8 +598,8 @@ export class IngestController {
       }
       return job;
     } finally {
-      this.running.delete(sid);
-      await ledger.releaseLease(sid, this.owner).catch(() => {});
+      const entry = this.running.get(sid);
+      if (entry?.abort === abort) { this.running.delete(sid); if (entry.release) entry.release(); }
       this.emit(sid);
     }
   }
@@ -629,7 +632,7 @@ export class IngestController {
     if (job.serverDeleted) throw new Error('The server copy was deleted; exports are rendered on the server.');
     if (this.running.has(sid)) throw new Error('Busy with this recording — try again in a moment.');
     const abort = new AbortController();
-    this.running.set(sid, { abort });
+    this.running.set(sid, { abort, release: null });
     const save = async (j) => { this.jobs.set(sid, j); await ledger.putJob(j); this.emit(sid); };
     job.transcript = { ...(job.transcript ?? {}), exports: { ...(job.transcript?.exports ?? {}), [format]: { state: 'running', at: Date.now() } } };
     await save(job);

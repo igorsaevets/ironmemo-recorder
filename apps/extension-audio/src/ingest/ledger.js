@@ -10,13 +10,14 @@
  * only start/complete/abort) — it is therefore a credential store and stays under
  * TRUSTED_CONTEXTS (auth.js hardenStorage). It is never exported with settings/profiles.
  *
- * Leases (`ironmemo.ingestLease.v1:<sessionId>`) stop two Recordings pages from running the
- * same job; a lease older than LEASE_TTL_MS is dead (page closed) and may be taken over.
+ * Leases use the Web Locks API (navigator.locks) for true atomic mutual exclusion across
+ * extension pages. A lock is held for the full duration of the upload operation and released
+ * automatically when the page closes. No TTL or renewal polling needed.
+ * A2 fix — the previous storage-based get→set→get was not atomic (audit 20.09.2026).
  */
 
 export const JOB_PREFIX = 'ironmemo.ingest.v1:';
 export const LEASE_PREFIX = 'ironmemo.ingestLease.v1:';
-export const LEASE_TTL_MS = 15_000;
 export const LEDGER_SCHEMA = 1;
 
 let chain = Promise.resolve();
@@ -62,27 +63,22 @@ export function removeJob(sessionId) {
   return serialized(() => chrome.storage.local.remove([JOB_PREFIX + sessionId, LEASE_PREFIX + sessionId]));
 }
 
-export async function acquireLease(sessionId, owner) {
-  const key = LEASE_PREFIX + sessionId;
-  const cur = (await chrome.storage.local.get(key))[key];
-  if (cur && cur.owner !== owner && Date.now() - cur.at < LEASE_TTL_MS) return { ok: false, owner: cur.owner, at: cur.at };
-  await chrome.storage.local.set({ [key]: { owner, at: Date.now() } });
-  const check = (await chrome.storage.local.get(key))[key];
-  return { ok: check?.owner === owner, owner: check?.owner ?? null, at: check?.at ?? null };
-}
-
-export async function renewLease(sessionId, owner) {
-  const key = LEASE_PREFIX + sessionId;
-  const cur = (await chrome.storage.local.get(key))[key];
-  if (cur && cur.owner !== owner && Date.now() - cur.at < LEASE_TTL_MS) return false;
-  await chrome.storage.local.set({ [key]: { owner, at: Date.now() } });
-  return true;
-}
-
-export async function releaseLease(sessionId, owner) {
-  const key = LEASE_PREFIX + sessionId;
-  const cur = (await chrome.storage.local.get(key))[key];
-  if (cur?.owner === owner) await chrome.storage.local.remove(key);
+/**
+ * Acquire an exclusive lock for the given session using the Web Locks API.
+ * Returns { ok: true, release: Function } or { ok: false }.
+ * The lock is held until release() is called or the page is destroyed.
+ */
+export function acquireLease(sessionId) {
+  return new Promise((resolve) => {
+    try {
+      navigator.locks.request(LEASE_PREFIX + sessionId, { ifAvailable: true }, (lock) => {
+        if (!lock) { resolve({ ok: false }); return; }
+        return new Promise((releaseFn) => {
+          resolve({ ok: true, release: () => releaseFn() });
+        });
+      }).catch(() => resolve({ ok: false }));
+    } catch { resolve({ ok: false }); }
+  });
 }
 
 /** States in which the page is (or should be) actively working on the job. */
