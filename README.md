@@ -39,7 +39,7 @@ Requires Python 3.12+ and Chrome for Testing 152+.
 ```
 pip install -r tests/requirements.txt
 playwright install chromium
-npx @puppeteer/browsers install chrome@152
+npx @puppeteer/browsers install chrome@152 --install-dir runs/chrome-for-testing
 ```
 
 **Smoke test** — verifies extension loads and all pages render:
@@ -47,15 +47,16 @@ npx @puppeteer/browsers install chrome@152
 ```
 python tests/smoke_test.py
 python tests/smoke_test.py --headed     # visible browser
+python tests/smoke_test.py --cft-only   # fail if CfT is missing
 ```
 
-**Crash matrix** — measures recovery across strategy x failure combinations:
+**Crash matrix** — measures recovery across strategy x failure combinations.
+Requires the parent project directory structure (`03-research/`, `runs/fake-audio/`)
+and `ffmpeg`/`ffprobe` on PATH. See `tests/crash_matrix.py` docstring for details.
 
 ```
 python tests/crash_matrix.py --strategy webcodecs_muxed --failure chrome_kill --seconds 60
 ```
-
-Requires `ffmpeg` and `ffprobe` on PATH for audio decode verification.
 
 Test artifacts land in `runs/` (gitignored). Chrome for Testing goes in `runs/chrome-for-testing/`. To use a CfT binary from a custom location, set `IRONMEMO_CFT=/path/to/chrome`.
 
