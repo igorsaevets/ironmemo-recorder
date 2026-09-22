@@ -32,9 +32,36 @@ cd ironmemo-recorder
 2. Click the extension icon → Start Recording.
 3. Files land in **OPFS** (not the file system). Use the built-in session list to play, rename, trim, and download recordings.
 
+## Testing
+
+Requires Python 3.12+ and Chrome for Testing 152+.
+
+```
+pip install -r tests/requirements.txt
+playwright install chromium
+npx @puppeteer/browsers install chrome@152
+```
+
+**Smoke test** — verifies extension loads and all pages render:
+
+```
+python tests/smoke_test.py
+python tests/smoke_test.py --headed     # visible browser
+```
+
+**Crash matrix** — measures recovery across strategy x failure combinations:
+
+```
+python tests/crash_matrix.py --strategy webcodecs_muxed --failure chrome_kill --seconds 60
+```
+
+Requires `ffmpeg` and `ffprobe` on PATH for audio decode verification.
+
+Test artifacts land in `runs/` (gitignored). Chrome for Testing goes in `runs/chrome-for-testing/`. To use a CfT binary from a custom location, set `IRONMEMO_CFT=/path/to/chrome`.
+
 ## What it does NOT do (yet)
 
-- No CI pipeline or reproducible test path from a clean clone (A7).
+- No CI pipeline (A7 — local test path works, CI is future work).
 - No streaming SHA-256 for large files (I-3).
 - No retention auto-delete executor (I-3 / A6).
 - Power-loss and sleep recovery: 6 of 33 crash-matrix cells remain untested (I-2).
@@ -50,7 +77,10 @@ apps/extension-audio/
     popup/                 # user UI
     options/               # generated from settings-schema.js — do NOT hand-add fields
     shared/                # settings-schema.js (canonical), recovery.js, webm-demux.js
-tests/                     # Python crash-matrix bench + reboot harness (CfT + CDP)
+tests/                     # Python test bench (CfT + CDP + Playwright)
+  lib/browser.py           # Chrome for Testing launcher and helpers
+  smoke_test.py            # fast: load extension, verify pages render
+  crash_matrix.py          # full crash-recovery measurement
 ```
 
 ## License

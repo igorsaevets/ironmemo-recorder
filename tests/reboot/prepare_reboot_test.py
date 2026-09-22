@@ -30,9 +30,10 @@ import sys
 import time
 from pathlib import Path
 
-PROJECT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(PROJECT / ".claude" / "scripts"))
-from browser import find_chrome_for_testing, launch_chrome_cdp, prepare_test_extension, tone_server, trigger_action, wait_service_worker  # noqa: E402
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PROJECT = REPO_ROOT.parent
+sys.path.insert(0, str(REPO_ROOT / "tests"))
+from lib.browser import find_chrome_for_testing, launch_chrome_cdp, prepare_test_extension, tone_server, trigger_action, wait_service_worker  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 RUN = PROJECT / "runs" / "i2" / "reboot"

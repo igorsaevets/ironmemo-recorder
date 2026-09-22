@@ -50,10 +50,11 @@ from playwright.sync_api import sync_playwright
 #      hard outer safety net — the cell dies with rc=-999 and its subprocess tree is
 #      swept, but the process itself never comes back.
 
-PROJECT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(PROJECT / ".claude" / "scripts"))
-from browser import (close_real_chrome, find_chrome_for_testing, launch_chrome_cdp, prepare_test_extension,  # noqa: E402
-                     real_chrome_context_note, run_context_note, tone_server, trigger_action, wait_service_worker)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PROJECT = REPO_ROOT.parent
+sys.path.insert(0, str(REPO_ROOT / "tests"))
+from lib.browser import (close_real_chrome, find_chrome_for_testing, launch_chrome_cdp, prepare_test_extension,  # noqa: E402
+                          real_chrome_context_note, run_context_note, tone_server, trigger_action, wait_service_worker)
 
 OUT_ROOT = PROJECT / "03-research" / "I2-crash-recovery"
 RUNS_ROOT = PROJECT / "runs" / "i2"
