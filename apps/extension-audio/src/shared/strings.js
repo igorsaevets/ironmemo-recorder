@@ -263,6 +263,10 @@ export const S = Object.freeze({
   searchPlaceholder: 'Search by name or date…',
   searchNoResults: 'No recordings match your search.',
 
+  // ── markers (UF9) ──
+  btnMark: 'Mark',
+  markerRemoveTitle: 'Remove marker',
+
   // ── download / export states (UF8) ──
   btnDownload: 'Download',
   dlPreparing: 'Preparing…',

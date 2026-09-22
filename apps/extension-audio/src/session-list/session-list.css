@@ -75,6 +75,17 @@ footer { display: flex; justify-content: space-between; align-items: center; mar
                color: var(--muted); white-space: nowrap; }
 .player-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
 
+/* ── UF9: marker bar ───────────────────────────────────────────────────────────────── */
+.marker-bar { display: flex; align-items: center; gap: 4px; padding: 6px 4px;
+              border-top: 1px solid var(--line); flex-wrap: wrap; }
+.marker-bar[hidden] { display: none; }
+.marker-chip { font: 12px/1 ui-monospace, "SF Mono", Consolas, monospace;
+               padding: 3px 8px; border-radius: 12px; background: rgba(79,124,255,.15);
+               border-color: rgba(79,124,255,.35); color: #a2bcff; }
+.marker-chip:hover { background: rgba(79,124,255,.25); border-color: var(--accent); }
+.marker-remove { font-size: 11px; padding: 2px 4px; margin-right: 6px; opacity: .5; }
+.marker-remove:hover { opacity: 1; color: var(--error); }
+
 /* ── UF4: trim bar ─────────────────────────────────────────────────────────────────── */
 .trim-bar { display: flex; align-items: center; gap: 8px; padding: 8px 4px;
             border-top: 1px dashed var(--line); flex-wrap: wrap; }

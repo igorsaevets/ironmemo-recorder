@@ -235,7 +235,7 @@ async function listSessions() {
 
     const engine = report?.engine ?? null;
 
-    out.push({ sid, bytes, files, groups, otherFiles, transcriptFiles: files.filter((f) => isTranscriptFile(f.name)), startedAt, durationSec, status, engine, report, recovery, displayName: meta?.displayName || null });
+    out.push({ sid, bytes, files, groups, otherFiles, transcriptFiles: files.filter((f) => isTranscriptFile(f.name)), startedAt, durationSec, status, engine, report, recovery, displayName: meta?.displayName || null, markers: Array.isArray(meta?.markers) ? meta.markers : [] });
   }
 
   out.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
@@ -295,6 +295,7 @@ function renderSession(s) {
     </div>
     <div class="roles"></div>
     <div class="player-bar" hidden></div>
+    <div class="marker-bar" hidden></div>
     <div class="trim-bar" hidden></div>
     <div class="ingest" hidden></div>
     <div class="session-actions">
@@ -779,6 +780,11 @@ async function handleAction(e, session, sessionEl) {
   if (action === 'player-stop') { stopPlayback(); return; }
 
   // ── UF4: trim ──
+  // ── UF9: markers ──
+  if (action === 'marker-add') { await addMarker(session, sessionEl); return; }
+  if (action === 'marker-jump') { if (activePlayer) { activePlayer.audio.currentTime = parseFloat(btn.dataset.sec); updatePlayerTime(); } return; }
+  if (action === 'marker-remove') { await removeMarker(session, parseInt(btn.dataset.index, 10), sessionEl); return; }
+
   if (action === 'trim-enter') { enterTrimMode(); return; }
   if (action === 'trim-mark-start') { if (activePlayer && trimState) { trimState.startSec = activePlayer.audio.currentTime; renderTrimBar(); } return; }
   if (action === 'trim-mark-end') { if (activePlayer && trimState) { trimState.endSec = activePlayer.audio.currentTime; renderTrimBar(); } return; }
@@ -1003,6 +1009,7 @@ async function startPlayback(sid, roleKey, fileName, sessionEl) {
     <span class="player-time"><span data-role="current">0:00</span> / <span data-role="total">${escapeHtml(S.playerDurationUnknown)}</span></span>
     <input type="range" class="player-seek" min="0" max="100" value="0" step="0.1" aria-label="Seek">
     <span class="player-label">${escapeHtml(label)}</span>
+    <button class="btn" data-action="marker-add" aria-label="${escapeHtml(S.btnMark)}">${escapeHtml(S.btnMark)}</button>
     ${isOgg ? `<button class="btn" data-action="trim-enter" aria-label="${escapeHtml(S.btnTrim)}">${escapeHtml(S.btnTrim)}</button>` : ''}
     <button class="btn ghost" data-action="player-stop" aria-label="${escapeHtml(S.playerStop)}">&times;</button>
   `;
@@ -1032,6 +1039,7 @@ async function startPlayback(sid, roleKey, fileName, sessionEl) {
     stopPlayback();
   });
 
+  renderMarkers(sessionEl, sessionsById.get(sid));
   try { await audio.play(); updatePlayerDisplay(); }
   catch (e) {
     if (e?.name === 'AbortError') return;
@@ -1055,6 +1063,8 @@ function stopPlayback() {
   if (sessionEl) {
     const btn = sessionEl.querySelector(`button[data-action="play"][data-role="${role}"]`);
     if (btn) btn.textContent = S.btnPlay;
+    const markerBar = sessionEl.querySelector('.marker-bar');
+    if (markerBar) { markerBar.innerHTML = ''; markerBar.hidden = true; }
   }
   activePlayer = null;
 }
@@ -1324,6 +1334,39 @@ async function onClaimVerify() {
   } finally { claimBusy(false); }
 }
 
+// ── UF9: timeline markers ──
+
+function renderMarkers(sessionEl, session) {
+  const bar = sessionEl?.querySelector('.marker-bar');
+  if (!bar) return;
+  if (!session?.markers?.length) { bar.innerHTML = ''; bar.hidden = true; return; }
+  const sorted = [...session.markers].sort((a, b) => a.sec - b.sec);
+  bar.innerHTML = sorted.map((m, i) =>
+    `<button class="btn marker-chip" data-action="marker-jump" data-sec="${m.sec}" title="${formatPlayerTime(m.sec)}">${formatPlayerTime(m.sec)}</button>` +
+    `<button class="btn ghost marker-remove" data-action="marker-remove" data-index="${session.markers.indexOf(m)}" title="${escapeHtml(S.markerRemoveTitle)}">&times;</button>`
+  ).join('');
+  bar.hidden = false;
+}
+
+async function addMarker(session, sessionEl) {
+  if (!activePlayer || !isFinite(activePlayer.audio.currentTime)) return;
+  const sec = Math.round(activePlayer.audio.currentTime * 100) / 100;
+  if (!session.markers) session.markers = [];
+  if (session.markers.some((m) => Math.abs(m.sec - sec) < 0.5)) return;
+  session.markers.push({ sec, createdAt: Date.now() });
+  try { await saveMeta(session.sid, { markers: session.markers }); }
+  catch (e) { showStatus(`Could not save marker: ${e?.message ?? e}`, 'error'); }
+  renderMarkers(sessionEl, session);
+}
+
+async function removeMarker(session, index, sessionEl) {
+  if (!session.markers || index < 0 || index >= session.markers.length) return;
+  session.markers.splice(index, 1);
+  try { await saveMeta(session.sid, { markers: session.markers.length ? session.markers : null }); }
+  catch (e) { showStatus(`Could not save marker: ${e?.message ?? e}`, 'error'); }
+  renderMarkers(sessionEl, session);
+}
+
 // ── UF4: trim ──
 
 function enterTrimMode() {
@@ -1482,6 +1525,7 @@ async function saveMeta(sid, patch) {
   } catch {}
   const merged = { ...existing, ...patch };
   if (merged.displayName === null || merged.displayName === '') delete merged.displayName;
+  if (merged.markers === null || (Array.isArray(merged.markers) && !merged.markers.length)) delete merged.markers;
   const fh = await dh.getFileHandle('meta.json', { create: true });
   const writable = await fh.createWritable();
   try { await writable.write(JSON.stringify(merged)); await writable.close(); }
