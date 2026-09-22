@@ -727,7 +727,9 @@ async function handleAction(e, session, sessionEl) {
     const original = btn.textContent;
     btn.disabled = true; btn.textContent = S.dlPreparing;
     try {
+      const t0 = performance.now();
       const result = await downloadLocal(session.sid, btn.dataset.file, btn.dataset.ext, session);
+      console.log(`[UF8] download-local: ${(performance.now() - t0).toFixed(0)} ms`);
       if (result === 'cancelled') {
         btn.disabled = false; btn.textContent = original;
       } else {
@@ -887,21 +889,34 @@ const SAVE_TYPES = {
   srt:  { description: 'Subtitles', accept: { 'text/plain': ['.srt'] } },
 };
 
-async function saveFileToUser(blob, suggestedName, ext) {
+// Accepts a Blob/File OR an async function that returns one.
+// When blobOrFn is a function, the picker opens first (within the user gesture)
+// and the data is prepared after — Chrome's prescribed order (developer.chrome.com).
+async function saveFileToUser(blobOrFn, suggestedName, ext) {
   if (typeof showSaveFilePicker === 'function') {
+    let handle;
     try {
       const types = SAVE_TYPES[ext] ? [SAVE_TYPES[ext]] : [];
-      const handle = await showSaveFilePicker({ suggestedName, types });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      return 'saved';
+      handle = await showSaveFilePicker({ suggestedName, types });
     } catch (e) {
       if (e.name === 'AbortError') return 'cancelled';
-      if (e.name === 'SecurityError') { /* gesture expired or API blocked — fall through */ }
+      if (e.name === 'SecurityError') { handle = null; }
       else throw e;
     }
+    if (handle) {
+      const blob = typeof blobOrFn === 'function' ? await blobOrFn() : blobOrFn;
+      const writable = await handle.createWritable();
+      try {
+        await writable.write(blob);
+        await writable.close();
+      } catch (e) {
+        try { await writable.abort(); } catch {}
+        throw e;
+      }
+      return 'saved';
+    }
   }
+  const blob = typeof blobOrFn === 'function' ? await blobOrFn() : blobOrFn;
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = suggestedName;
@@ -913,42 +928,41 @@ async function saveFileToUser(blob, suggestedName, ext) {
 }
 
 async function downloadFile(sid, name, roleKey, ext, session) {
-  const root = await navigator.storage.getDirectory();
-  const sessionsDir = await root.getDirectoryHandle('sessions');
-  const dh = await sessionsDir.getDirectoryHandle(sid);
-  const fh = await dh.getFileHandle(name);
-  const file = await fh.getFile();
-
   const base = filenameBase(session);
   const roleSlug = ROLE_SLUG[roleKey] ?? roleKey;
   const suffix = name.includes('.recovered.') ? '-recovered' : '';
   const filename = `${base}-${roleSlug}${suffix}.${ext}`;
 
-  return saveFileToUser(file, filename, ext);
+  return saveFileToUser(async () => {
+    const root = await navigator.storage.getDirectory();
+    const sessionsDir = await root.getDirectoryHandle('sessions');
+    const dh = await sessionsDir.getDirectoryHandle(sid);
+    const fh = await dh.getFileHandle(name);
+    return fh.getFile();
+  }, filename, ext);
 }
 
 async function downloadParts(sid, roleKey, segment, parts, session) {
-  const root = await navigator.storage.getDirectory();
-  const sessionsDir = await root.getDirectoryHandle('sessions');
-  const dh = await sessionsDir.getDirectoryHandle(sid);
-
-  // Parts within one segment concatenate to a valid WebM (single EBML header
-  // in the first timeslice; subsequent chunks are continuation clusters).
-  const ordered = [...parts].sort((a, b) => a.name.localeCompare(b.name));
-  const blobs = [];
-  for (const p of ordered) {
-    const fh = await dh.getFileHandle(p.name);
-    const f = await fh.getFile();
-    blobs.push(f);
-  }
-  const combined = new Blob(blobs, { type: 'audio/webm' });
-
   const base = filenameBase(session);
   const roleSlug = ROLE_SLUG[roleKey] ?? roleKey;
   const segSuffix = segment && segment !== '000' ? `-seg${segment}` : '';
   const filename = `${base}-${roleSlug}${segSuffix}.webm`;
 
-  return saveFileToUser(combined, filename, 'webm');
+  return saveFileToUser(async () => {
+    const root = await navigator.storage.getDirectory();
+    const sessionsDir = await root.getDirectoryHandle('sessions');
+    const dh = await sessionsDir.getDirectoryHandle(sid);
+    // Parts within one segment concatenate to a valid WebM (single EBML header
+    // in the first timeslice; subsequent chunks are continuation clusters).
+    const ordered = [...parts].sort((a, b) => a.name.localeCompare(b.name));
+    const blobs = [];
+    for (const p of ordered) {
+      const fh = await dh.getFileHandle(p.name);
+      const f = await fh.getFile();
+      blobs.push(f);
+    }
+    return new Blob(blobs, { type: 'audio/webm' });
+  }, filename, 'webm');
 }
 
 async function deleteSession(sid) {
@@ -1106,11 +1120,12 @@ async function readSessionFileText(sid, name) {
 
 /** transcript.v2.json → IronMemo-<date>-transcript.json, transcript.txt → …-transcript.txt, summary.md → …-summary.md, export.srt → …-transcript.srt */
 async function downloadLocal(sid, name, ext, session) {
-  const file = await (await (await sessionDirHandle(sid)).getFileHandle(name)).getFile();
   const base = filenameBase(session);
   const kind = name === FILES.summary ? 'summary' : 'transcript';
   const filename = `${base}-${kind}.${ext}`;
-  return saveFileToUser(file, filename, ext);
+  return saveFileToUser(async () => {
+    return (await (await sessionDirHandle(sid)).getFileHandle(name)).getFile();
+  }, filename, ext);
 }
 
 // ── I4b part 2: account bar ──
