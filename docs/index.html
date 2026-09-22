@@ -22,27 +22,28 @@
 </head>
 <body>
 <h1>IronMemo Audio Recorder</h1>
-<p class="lede">A Chrome extension that records microphone and browser tab audio locally, keeps recording when the tab is closed, and decodes the file after a Chrome crash.</p>
+<p class="lede">A Chrome extension that records microphone and browser tab audio locally, with optional cloud transcription. No bot joins the call.</p>
 
 <div class="box">
-  <p><strong>All recording stays on your device.</strong> No server, no cloud, no analytics, no AI on your recordings without your separate permission.</p>
+  <p><strong>All recording stays on your device.</strong> Cloud transcription is optional, per-recording, and only starts when you click <em>Transcribe</em> — nothing is uploaded without your explicit consent.</p>
 </div>
 
 <h2>What it does</h2>
 <ul>
-  <li>Records the microphone.</li>
+  <li>Records the microphone with a live level meter.</li>
   <li>Records the audio of a browser tab you pick, without a meeting bot.</li>
-  <li>Keeps recording when the tab is closed.</li>
-  <li>Decodes the file end-to-end after Chrome crashes or the machine loses power.</li>
-  <li>Lets you download each recording as a plain audio file.</li>
+  <li>Keeps recording when the popup is closed.</li>
+  <li>Recovers recorded audio after a Chrome crash. Power-loss recovery is designed but not yet fully tested.</li>
+  <li>Lets you browse, play, rename, trim, and download recordings from a built-in session list.</li>
+  <li>Optionally transcribes a recording via IronMemo cloud — first 10 minutes free per account after e-mail verification.</li>
 </ul>
 
 <h2>What it does not do</h2>
 <ul>
-  <li>It does not send anything to any server. No cloud upload. No backend.</li>
+  <li>It does not upload anything automatically. Cloud transcription requires a separate per-recording consent.</li>
   <li>It does not use your recordings to train any AI model.</li>
   <li>It does not read page text, passwords, or browsing history.</li>
-  <li>It does not run any analytics.</li>
+  <li>It does not run any analytics or crash-reporting inside the extension.</li>
 </ul>
 
 <h2>Documents</h2>
@@ -56,6 +57,6 @@
 <p>Laws that govern the recording of conversations differ between jurisdictions. Before you record a meeting or a call, tell every participant, and get their agreement if the law you are subject to requires it. This is the user's own responsibility; the extension does not check it.</p>
 
 <h2>Status</h2>
-<p>Early development. The extension is not yet listed on the Chrome Web Store. Feedback is welcome via the issue tracker.</p>
+<p>Available on the <a href="https://chromewebstore.google.com/detail/epnajjfddhbhgabhmcaomfnjhnhjnchd">Chrome Web Store</a> — free to install and use. Feedback is welcome via the <a href="https://github.com/igorsaevets/ironmemo-recorder/issues">issue tracker</a>.</p>
 </body>
 </html>

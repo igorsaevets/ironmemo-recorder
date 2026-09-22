@@ -24,7 +24,7 @@
 </head>
 <body>
 <h1>Privacy Policy — IronMemo Audio Recorder</h1>
-<p class="meta">Effective date: 13 September 2026 · Applies to extension v0.6.0 and later · <a href="./">Back to home</a></p>
+<p class="meta">Effective date: 21 September 2026 · Applies to extension v0.6.0 and later · <a href="./">Back to home</a></p>
 
 <p>IronMemo Audio Recorder ("the extension") is a Chrome extension that records microphone and browser tab audio on the user's own device. Starting with v0.6.0, the extension can also send one recording at a time to IronMemo servers for transcription — always <em>after</em> a separate consent dialog and never automatically. This policy explains exactly what data the extension handles, what is optional, and what happens on the server if you choose to use it.</p>
 
@@ -70,13 +70,22 @@
 <h3>Where it goes</h3>
 <p>The upload target is <code>app.ironmemo.com</code>. The extension holds this origin as an <em>optional</em> host permission: it is requested from Chrome only when you accept the cloud consent, and no host-permission warning is shown at install time.</p>
 
-<p>IronMemo performs the transcription itself and delegates the speech-to-text step to third-party sub-processors. As of September 2026 these are:</p>
+<p>IronMemo performs the transcription itself and delegates individual steps to third-party sub-processors. As of the effective date shown at the top of this page:</p>
+
+<h3>Speech-to-text</h3>
 <ul>
   <li><strong>ElevenLabs Scribe</strong> — used for most languages. Retention policy: <a href="https://elevenlabs.io/docs/eleven-api/resources/zero-retention-mode">elevenlabs.io/docs/eleven-api/resources/zero-retention-mode</a>.</li>
-  <li><strong>AssemblyAI</strong> — used as a wide-tail fallback (models <em>best</em> and <em>universal</em>). Retention policy: <a href="https://www.assemblyai.com/docs/faq/what-is-your-data-retention-policy">assemblyai.com/docs/faq/what-is-your-data-retention-policy</a>.</li>
+  <li><strong>AssemblyAI</strong> — used as a wide-tail fallback (models <em>best</em> and <em>universal</em>). Retention policy: <a href="https://www.assemblyai.com/docs/data-retention-and-model-training">assemblyai.com/docs/data-retention-and-model-training</a>.</li>
   <li><strong>GigaAM</strong> — used for Russian.</li>
 </ul>
-<p>The provider used for a given recording is recorded in the transcript metadata (<code>engine.asr_model_id</code>). This list is current as of the effective date shown at the top of this page; if it changes, this page is updated together with the extension update that changes it.</p>
+
+<h3>Summaries, action items, AI chat</h3>
+<ul>
+  <li><strong>OpenAI</strong>, <strong>Google</strong>, <strong>xAI</strong> — the transcript text (not the audio) may be sent to one of these providers to generate a summary, extract action items, or answer questions about the recording. Which provider is used depends on the language and the task.</li>
+  <li><strong>DeepInfra</strong> — vector embeddings of transcript text, used for search and AI chat. No audio is sent.</li>
+</ul>
+
+<p>The provider used for a given recording is recorded in the transcript metadata (<code>engine.asr_model_id</code> for speech-to-text). The full and current list of sub-processors is maintained at <a href="https://ironmemo.com/subprocessors">ironmemo.com/subprocessors</a>; if the list changes, this page is updated together with the extension update that changes it.</p>
 
 <h3>Retention on the server</h3>
 <ul>
@@ -102,10 +111,10 @@
 <h2>5. Sharing</h2>
 <p>The extension does not sell, transfer, or share user data for advertising or profile-building. There is no analytics provider, no advertising network, and no crash-reporting service embedded in the extension itself.</p>
 
-<p>When you choose to Transcribe a recording, the audio file and its metadata are shared with IronMemo and its speech-to-text sub-processors listed in section 3, for the sole purpose of returning the transcript. No other third party receives them.</p>
+<p>When you choose to Transcribe a recording, the audio file and its metadata are shared with IronMemo and the sub-processors listed in section 3: speech-to-text providers receive the audio, and LLM providers receive the transcript text for summaries and AI features. No other third party receives your data.</p>
 
 <h2>6. AI use</h2>
-<p>Local recording performs no AI processing. When you click <em>Transcribe with IronMemo</em>, the audio is converted into a text transcript by the speech-to-text sub-processors named in section 3, and IronMemo may produce a short AI-generated summary from that transcript on the server side. IronMemo does not train models on your recordings, transcripts, or summaries (see section 3).</p>
+<p>Local recording performs no AI processing. When you click <em>Transcribe with IronMemo</em>, the audio is converted into a text transcript by the speech-to-text sub-processors named in section 3, and IronMemo may produce a summary, action items, or AI-chat answers from that transcript using the LLM sub-processors also named in section 3. Only the transcript text is sent to LLM providers — not the audio. IronMemo does not train models on your recordings, transcripts, or summaries (see section 3).</p>
 
 <h2>7. Recording consent and user responsibility</h2>
 <p>The extension shows a consent screen in the popup on first use that summarizes what it does and what it does not do. When you first click <em>Transcribe</em>, a second, separate consent dialog explains what is uploaded, where, and to which sub-processors — you must accept it before any upload starts.</p>

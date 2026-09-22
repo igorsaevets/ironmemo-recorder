@@ -1,17 +1,17 @@
 # IronMemo Audio Recorder
 
-Chrome MV3 extension for recording meetings and calls locally: microphone and tab audio, works while the tab is closed, decodes the file after Chrome crashes.
+Chrome MV3 extension for recording meetings and calls locally, with optional cloud transcription. Microphone and tab audio, works while the popup is closed, recovers after Chrome crashes.
 
-**Status: v0.4.0 is published on the Chrome Web Store** ([listing](https://chromewebstore.google.com/detail/epnajjfddhbhgabhmcaomfnjhnhjnchd)); v0.5.0 is in review. Also loads as an unpacked extension for development.
+**Status: v0.6.0 is live on the Chrome Web Store** ([listing](https://chromewebstore.google.com/detail/epnajjfddhbhgabhmcaomfnjhnhjnchd)). Also loads as an unpacked extension for development.
 
 ## What it does
 
 - Captures **microphone** (`getUserMedia`) and **tab audio** (`chrome.tabCapture`).
-- Records **while the tab is closed** — the tab stream is transferred to an offscreen document at start; closing the tab does not stop the recording.
+- Records **while the popup is closed** — the captured streams are transferred to an offscreen document at start; closing the popup does not stop the recording. Closing the captured tab ends the tab-audio track but the microphone track continues.
 - Writes to **OPFS** via a dedicated worker with `createSyncAccessHandle`. Durable page-level flushes every ~1 s.
-- **Decodes fully after a crash**: `recovery.js` lifts truncated MediaRecorder `.part` files into complete, seekable output. Measured on 21 of 27 cells of a 3-strategy × 9-failure matrix (`tests/crash_matrix.py`); all 21 decode fully with `ffmpeg 9.0` and Chrome `AudioDecoder`, journal is a subset of the disk in every cell.
+- **Recovers after a crash**: `recovery.js` lifts truncated MediaRecorder `.part` files into complete, seekable output. Measured on 27 of 33 cells of the crash matrix (`tests/crash_matrix.py`); all 27 decode fully with `ffmpeg 9.0` and Chrome `AudioDecoder`. Remaining 6 cells (reboot + sleep × 3 strategies) are untested.
 
-## Defaults (v0.2.0)
+## Defaults
 
 - **Engine**: WebCodecs (Opus)
 - **Container**: Ogg
@@ -29,15 +29,15 @@ cd ironmemo-recorder
 ```
 
 1. `chrome://extensions/` → Developer mode → Load unpacked → select `apps/extension-audio/`.
-2. Click the extension icon → «Начать запись».
-3. Files land in **OPFS** (not the file system) — inspect via `chrome://inspect/#origin`. Physical export via `chrome.downloads` is planned.
+2. Click the extension icon → Start Recording.
+3. Files land in **OPFS** (not the file system). Use the built-in session list to play, rename, trim, and download recordings.
 
 ## What it does NOT do (yet)
 
-- Chrome Web Store: v0.4.0 published (2026-09); promo tiles and localized screenshots still pending.
-- No live waveform in the popup — a silently-empty file is possible if the OS/driver holds the microphone.
-- No user-visible session list — files live in OPFS, invisible in Explorer/Finder.
-- No backend upload — the recorder is 100 % local.
+- No CI pipeline or reproducible test path from a clean clone (A7).
+- No streaming SHA-256 for large files (I-3).
+- No retention auto-delete executor (I-3 / A6).
+- Power-loss and sleep recovery: 6 of 33 crash-matrix cells remain untested (I-2).
 
 ## Structure
 
