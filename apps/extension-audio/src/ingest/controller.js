@@ -179,16 +179,18 @@ export class IngestController {
     const lease = await ledger.acquireLease(sid);
     if (!lease.ok) throw new Error('Another Recordings tab is already handling this recording.');
 
-    let job;
-    if (existing?.recordingId && existing.state !== 'cancelled') {
-      job = { ...existing, state: existing.pausedFrom ?? existing.state, pausedFrom: null };
-      if (job.state === 'paused' || job.state === 'error') job.state = job.uploadId ? 'uploading' : 'session';
-    } else {
-      const asset = pickAsset(session); // throws AssetError with a user-facing message
-      job = this.newJob(session, asset);
-    }
-    await ledger.putJob(job); this.jobs.set(sid, job); this.emit(sid);
-    return this.run(sid, lease.release);
+    try {
+      let job;
+      if (existing?.recordingId && existing.state !== 'cancelled') {
+        job = { ...existing, state: existing.pausedFrom ?? existing.state, pausedFrom: null };
+        if (job.state === 'paused' || job.state === 'error') job.state = job.uploadId ? 'uploading' : 'session';
+      } else {
+        const asset = pickAsset(session); // throws AssetError with a user-facing message
+        job = this.newJob(session, asset);
+      }
+      await ledger.putJob(job); this.jobs.set(sid, job); this.emit(sid);
+      return this.run(sid, lease.release);
+    } catch (e) { lease.release(); throw e; }
   }
 
   newJob(session, asset) {
@@ -242,14 +244,14 @@ export class IngestController {
       if (needFetch || needCheck) out.push(this.syncCompleted(job.sessionId));
     }
     if (blocked && !this.resumeTimer) {
-      this.resumeTimer = setTimeout(() => { this.resumeTimer = null; this.resumeAll().catch(() => {}); }, 5000);
+      this.resumeTimer = setTimeout(() => { this.resumeTimer = null; this.resumeAll().catch(() => {}); }, 10_000);
     }
     return Promise.all(out);
   }
 
-  /** Best-effort on pagehide: release all held Web Locks so the next page can take over immediately. */
+  /** Best-effort on pagehide: abort running operations and release all held Web Locks. */
   releaseAllLeases() {
-    for (const [, entry] of this.running) { if (typeof entry.release === 'function') entry.release(); }
+    for (const [, entry] of this.running) { entry.abort?.abort(); if (typeof entry.release === 'function') entry.release(); }
   }
 
   async pause(sid, reason = 'user') {
@@ -277,17 +279,18 @@ export class IngestController {
     if (job.state === 'paused' || job.state === 'error' || job.state === 'create_unknown' || job.state === 'finalize_unknown') {
       const lease = await ledger.acquireLease(sid);
       if (!lease.ok) throw new Error('Another Recordings tab is already handling this recording.');
-      if (job.state === 'paused') { job.state = job.pausedFrom ?? (job.uploadId ? 'uploading' : 'session'); job.pausedFrom = null; }
-      else if (job.state === 'error') {
-        if (job.stateReason === 'auth_lost' && this.authMode === 'guest') { await this.auth.logout(); job.state = 'session'; job.userId = null; job.workspaceId = null; job.recordingId = null; job.uploadId = null; job.parts = []; job.singlePut = null; job.transport = null; }
-        // e-mail mode after auth_lost: the reconnect signed into the SAME account (LOGGED_IN) — continue where it stopped
-        else if (job.uploadId) job.state = job.completeIntentAt ? 'finalizing' : 'uploading';
-        else if (job.recordingId) job.state = 'uploading';
-        else job.state = 'session';
-      }
-      job.stateReason = null;
-      await ledger.putJob(job); this.jobs.set(sid, job); this.emit(sid);
-      return this.run(sid, lease.release);
+      try {
+        if (job.state === 'paused') { job.state = job.pausedFrom ?? (job.uploadId ? 'uploading' : 'session'); job.pausedFrom = null; }
+        else if (job.state === 'error') {
+          if (job.stateReason === 'auth_lost' && this.authMode === 'guest') { await this.auth.logout(); job.state = 'session'; job.userId = null; job.workspaceId = null; job.recordingId = null; job.uploadId = null; job.parts = []; job.singlePut = null; job.transport = null; }
+          else if (job.uploadId) job.state = job.completeIntentAt ? 'finalizing' : 'uploading';
+          else if (job.recordingId) job.state = 'uploading';
+          else job.state = 'session';
+        }
+        job.stateReason = null;
+        await ledger.putJob(job); this.jobs.set(sid, job); this.emit(sid);
+        return this.run(sid, lease.release);
+      } catch (e) { lease.release(); throw e; }
     }
     return this.run(sid);
   }
@@ -318,7 +321,7 @@ export class IngestController {
 
   // ── the state machine ────────────────────────────────────────────────────────────────
   async run(sid, release = null) {
-    if (this.running.has(sid)) return this.jobs.get(sid);
+    if (this.running.has(sid)) { if (release) release(); return this.jobs.get(sid); }
     if (!release) {
       const lease = await ledger.acquireLease(sid);
       if (!lease.ok) return this.jobs.get(sid);
