@@ -262,6 +262,13 @@ export const S = Object.freeze({
   // ── search (UF6b) ──
   searchPlaceholder: 'Search by name or date…',
   searchNoResults: 'No recordings match your search.',
+
+  // ── download / export states (UF8) ──
+  btnDownload: 'Download',
+  dlPreparing: 'Preparing…',
+  dlAssembling: 'Assembling…',
+  dlSaved: 'Saved',
+  dlSentToDownloads: 'Sent to Downloads',
 });
 
 /** Popup: the one-time notice existing users see after the update (no consent bump — ADR-008 «Уточнения» 5). */

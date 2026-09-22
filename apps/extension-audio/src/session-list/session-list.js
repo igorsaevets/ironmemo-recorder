@@ -349,7 +349,7 @@ function renderRoleRow(role, g) {
       <div class="role-size">${formatBytes(f.size)}</div>
       <div class="role-actions">
         ${f.size > 0 ? `<button class="btn" data-action="play" data-role="${role}" data-file="${escapeHtml(f.name)}" aria-label="${escapeHtml(S.btnPlay)} ${escapeHtml(label)}">${escapeHtml(S.btnPlay)}</button>` : ''}
-        <button class="btn" data-action="download-file" data-role="${role}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">Download</button>
+        <button class="btn" data-action="download-file" data-role="${role}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">${escapeHtml(S.btnDownload)}</button>
       </div>
     `;
     return row;
@@ -363,7 +363,7 @@ function renderRoleRow(role, g) {
       <div class="role-size">${formatBytes(f.size)}</div>
       <div class="role-actions">
         ${f.size > 0 ? `<button class="btn" data-action="play" data-role="${role}" data-file="${escapeHtml(f.name)}" aria-label="${escapeHtml(S.btnPlay)} ${escapeHtml(label)}">${escapeHtml(S.btnPlay)}</button>` : ''}
-        <button class="btn" data-action="download-file" data-role="${role}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">Download</button>
+        <button class="btn" data-action="download-file" data-role="${role}" data-file="${escapeHtml(f.name)}" data-ext="${ext}">${escapeHtml(S.btnDownload)}</button>
       </div>
     `;
     return row;
@@ -388,7 +388,7 @@ function renderRoleRow(role, g) {
   const buttons = segments.map(([seg, parts]) => {
     const sz = parts.reduce((a, f) => a + f.size, 0);
     const suffix = segments.length > 1 ? ` #${seg}` : '';
-    return `<button class="btn" data-action="download-parts" data-role="${role}" data-segment="${seg}">Download${suffix} (${formatBytes(sz)})</button>`;
+    return `<button class="btn" data-action="download-parts" data-role="${role}" data-segment="${seg}">${escapeHtml(S.btnDownload)}${suffix} (${formatBytes(sz)})</button>`;
   }).join(' ');
   row.innerHTML = `
     <div class="role-name">${escapeHtml(label)} <span class="tag warn">${g.parts.length} chunks</span>${segNote}</div>
@@ -725,11 +725,15 @@ async function handleAction(e, session, sessionEl) {
   }
   if (action === 'download-local') {
     const original = btn.textContent;
-    btn.disabled = true; btn.textContent = 'Downloading…';
+    btn.disabled = true; btn.textContent = S.dlPreparing;
     try {
-      await downloadLocal(session.sid, btn.dataset.file, btn.dataset.ext, session);
-      btn.textContent = 'Done';
-      setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1200);
+      const result = await downloadLocal(session.sid, btn.dataset.file, btn.dataset.ext, session);
+      if (result === 'cancelled') {
+        btn.disabled = false; btn.textContent = original;
+      } else {
+        btn.textContent = result === 'saved' ? S.dlSaved : S.dlSentToDownloads;
+        setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1500);
+      }
     } catch (err) {
       showStatus(S.downloadFailed(err?.message ?? err), 'error');
       btn.disabled = false; btn.textContent = original;
@@ -784,14 +788,21 @@ async function handleAction(e, session, sessionEl) {
     const file = btn.dataset.file;
     const roleKey = btn.dataset.role;
     const ext = btn.dataset.ext;
-    btn.disabled = true; btn.textContent = 'Downloading…';
+    const original = btn.textContent;
+    btn.disabled = true; btn.textContent = S.dlPreparing;
     try {
-      await downloadFile(session.sid, file, roleKey, ext, session);
-      btn.textContent = 'Done';
-      setTimeout(() => { btn.disabled = false; btn.textContent = 'Download'; }, 1200);
+      const t0 = performance.now();
+      const result = await downloadFile(session.sid, file, roleKey, ext, session);
+      console.log(`[UF8] download-file prepare: ${(performance.now() - t0).toFixed(0)} ms`);
+      if (result === 'cancelled') {
+        btn.disabled = false; btn.textContent = original;
+      } else {
+        btn.textContent = result === 'saved' ? S.dlSaved : S.dlSentToDownloads;
+        setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1500);
+      }
     } catch (err) {
-      showStatus(`Download failed: ${err.message ?? err}`, 'error');
-      btn.disabled = false; btn.textContent = 'Download';
+      showStatus(S.downloadFailed(err?.message ?? err), 'error');
+      btn.disabled = false; btn.textContent = original;
     }
     return;
   }
@@ -804,13 +815,19 @@ async function handleAction(e, session, sessionEl) {
       return (m ? m[1] : '000') === segment;
     });
     const original = btn.textContent;
-    btn.disabled = true; btn.textContent = 'Assembling…';
+    btn.disabled = true; btn.textContent = S.dlAssembling;
     try {
-      await downloadParts(session.sid, roleKey, segment, parts, session);
-      btn.textContent = 'Done';
-      setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1200);
+      const t0 = performance.now();
+      const result = await downloadParts(session.sid, roleKey, segment, parts, session);
+      console.log(`[UF8] download-parts assemble: ${(performance.now() - t0).toFixed(0)} ms`);
+      if (result === 'cancelled') {
+        btn.disabled = false; btn.textContent = original;
+      } else {
+        btn.textContent = result === 'saved' ? S.dlSaved : S.dlSentToDownloads;
+        setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1500);
+      }
     } catch (err) {
-      showStatus(`Assembly failed: ${err.message ?? err}`, 'error');
+      showStatus(S.downloadFailed(err?.message ?? err), 'error');
       btn.disabled = false; btn.textContent = original;
     }
     return;
@@ -858,6 +875,43 @@ async function handleAction(e, session, sessionEl) {
   }
 }
 
+// ── UF8: honest export — showSaveFilePicker (true completion) → <a download> (fire-and-forget) ──
+
+const SAVE_TYPES = {
+  opus: { description: 'Opus Audio', accept: { 'audio/ogg': ['.opus'] } },
+  webm: { description: 'WebM Audio', accept: { 'audio/webm': ['.webm'] } },
+  wav:  { description: 'WAV Audio', accept: { 'audio/wav': ['.wav'] } },
+  txt:  { description: 'Text File', accept: { 'text/plain': ['.txt'] } },
+  json: { description: 'JSON File', accept: { 'application/json': ['.json'] } },
+  md:   { description: 'Markdown', accept: { 'text/markdown': ['.md'] } },
+  srt:  { description: 'Subtitles', accept: { 'text/plain': ['.srt'] } },
+};
+
+async function saveFileToUser(blob, suggestedName, ext) {
+  if (typeof showSaveFilePicker === 'function') {
+    try {
+      const types = SAVE_TYPES[ext] ? [SAVE_TYPES[ext]] : [];
+      const handle = await showSaveFilePicker({ suggestedName, types });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return 'saved';
+    } catch (e) {
+      if (e.name === 'AbortError') return 'cancelled';
+      if (e.name === 'SecurityError') { /* gesture expired or API blocked — fall through */ }
+      else throw e;
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = suggestedName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return 'requested';
+}
+
 async function downloadFile(sid, name, roleKey, ext, session) {
   const root = await navigator.storage.getDirectory();
   const sessionsDir = await root.getDirectoryHandle('sessions');
@@ -870,13 +924,7 @@ async function downloadFile(sid, name, roleKey, ext, session) {
   const suffix = name.includes('.recovered.') ? '-recovered' : '';
   const filename = `${base}-${roleSlug}${suffix}.${ext}`;
 
-  const url = URL.createObjectURL(file);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return saveFileToUser(file, filename, ext);
 }
 
 async function downloadParts(sid, roleKey, segment, parts, session) {
@@ -900,13 +948,7 @@ async function downloadParts(sid, roleKey, segment, parts, session) {
   const segSuffix = segment && segment !== '000' ? `-seg${segment}` : '';
   const filename = `${base}-${roleSlug}${segSuffix}.webm`;
 
-  const url = URL.createObjectURL(combined);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return saveFileToUser(combined, filename, 'webm');
 }
 
 async function deleteSession(sid) {
@@ -1068,13 +1110,7 @@ async function downloadLocal(sid, name, ext, session) {
   const base = filenameBase(session);
   const kind = name === FILES.summary ? 'summary' : 'transcript';
   const filename = `${base}-${kind}.${ext}`;
-  const url = URL.createObjectURL(file);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return saveFileToUser(file, filename, ext);
 }
 
 // ── I4b part 2: account bar ──
@@ -1336,15 +1372,15 @@ async function exportTrim(session, sessionEl) {
     const filename = `${base}-${roleSlug}-trim-${startTag}-${endTag}.opus`;
 
     const blob = new Blob([result.bytes], { type: 'audio/ogg; codecs=opus' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    const t0 = performance.now();
+    const saveResult = await saveFileToUser(blob, filename, 'opus');
+    console.log(`[UF8] trim-export save: ${(performance.now() - t0).toFixed(0)} ms, result: ${saveResult}`);
 
-    if (btn) { btn.textContent = S.trimDone; setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = S.trimExportSelection; } }, 1500); }
+    if (saveResult === 'cancelled') {
+      if (btn) { btn.disabled = false; btn.textContent = S.trimExportSelection; }
+    } else {
+      if (btn) { btn.textContent = saveResult === 'saved' ? S.dlSaved : S.dlSentToDownloads; setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = S.trimExportSelection; } }, 1500); }
+    }
   } catch (e) {
     showStatus(S.trimError(e?.message ?? String(e)), 'error');
     if (btn) { btn.disabled = false; btn.textContent = S.trimExportSelection; }
