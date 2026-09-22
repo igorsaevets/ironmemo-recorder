@@ -233,8 +233,12 @@ export function createAuth({ apiOrigin, log = () => {} }) {
     log('auth.logout', {});
   }
 
-  /** Test hook (bench only): forget the in-memory access value so the next call re-reads storage. */
-  function _resetMemory() { memAccess = null; }
+  /** Invalidate the in-memory access cache so the next getAccess() re-reads storage.
+   *  Called by the controller when chrome.storage.onChanged fires for ACCOUNT_KEY. */
+  function invalidateCache() { memAccess = null; }
 
-  return { pageId, status, ensureSession, getAccess, refresh, logout, loadAccount, hardenStorage, deviceId, adoptSession, _resetMemory };
+  /** Test hook (bench only): alias kept for existing bench scripts. */
+  function _resetMemory() { invalidateCache(); }
+
+  return { pageId, status, ensureSession, getAccess, refresh, logout, loadAccount, hardenStorage, deviceId, adoptSession, invalidateCache, _resetMemory };
 }

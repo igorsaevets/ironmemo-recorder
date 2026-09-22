@@ -97,6 +97,8 @@ export const S = Object.freeze({
   lostSessionHint: (emailMode) => (emailMode
     ? 'Reconnect verifies your e-mail again (a one-time code) and continues this upload under the same IronMemo account.'
     : 'Reconnect starts a NEW guest session and sends this recording again. Recordings uploaded under the old session stay on IronMemo but this extension can no longer open them.'),
+  wrongAccount: 'This recording belongs to a different IronMemo account.',
+  wrongAccountHint: 'Sign in with the account that started this upload to continue, or cancel and transcribe again with the current account.',
   btnReconnect: 'Reconnect',
   btnRetry: 'Retry',
   btnDismiss: 'Dismiss',
@@ -132,6 +134,8 @@ export const S = Object.freeze({
     server_deleted: 'the recording was deleted on IronMemo',
     not_found: 'the transcript is not on the server yet',
     shape: 'the server answered in an unexpected form',
+    wrong_account: 'this recording belongs to a different IronMemo account',
+    account_changed: 'the IronMemo account changed',
     local_deleted: 'the local files were deleted',
     NotFoundError: 'the local recording folder is gone',
     export_failed: 'the server could not render the export',
@@ -147,6 +151,7 @@ export const S = Object.freeze({
     check_now: 'Checking…',
     email_required: 'Paused: verify your e-mail to continue — the free minutes are granted per account.',
     signed_out: 'Paused: you signed out of IronMemo. Reconnect with your e-mail to continue.',
+    account_changed: 'Paused: the IronMemo account changed in another tab.',
   }),
   pausedOther: (reason) => `Paused (${reason ?? 'unknown'}).`,
   pausedHint: 'Local files are untouched. Resume continues from the last confirmed part.',

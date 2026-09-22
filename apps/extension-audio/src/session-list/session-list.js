@@ -402,7 +402,7 @@ function renderRoleRow(role, g) {
 // ─────────────────────────────────────────────────── I4a: ingest block per session ──
 
 const PREVIEW_LINES = 20;
-const NO_RETRY = ['too_large', 'too_long', 'unsupported', 'no_mix', 'multi_segment', 'no_file', 'recovered_invalid', 'payment', 'insufficient_credits'];
+const NO_RETRY = ['too_large', 'too_long', 'unsupported', 'no_mix', 'multi_segment', 'no_file', 'recovered_invalid', 'payment', 'insufficient_credits', 'wrong_account'];
 const expandedSids = new Set();               // transcript panels the user expanded ("Show all")
 const transcriptTextCache = new Map();        // sid → {sha, body: string[]} (transcript.txt minus the header)
 
@@ -470,7 +470,7 @@ function renderIngest(el, s) {
     if (cap?.applied) banners.push(['warn', capBannerHtml(cap, job)]);
     if (job.server?.mic_skipped_insufficient_credits) banners.push(['warn', escapeHtml(S.summarySkipped)]);
     if (job.serverDeleted) banners.push(['muted', escapeHtml(S.serverDeleted)]);
-    else if (job.authLost) banners.push(['error', escapeHtml(job.authLost.reason === 'signed_out' ? S.completedSignedOut : S.completedAuthLost)]);
+    else if (job.authLost) banners.push(['error', escapeHtml(job.authLost.reason === 'signed_out' ? S.completedSignedOut : job.authLost.reason === 'wrong_account' ? S.wrongAccount : S.completedAuthLost)]);
     const t = job.transcript;
     if (!t || t.state === 'pending') hint = escapeHtml(S.transcriptFetching);
     else if (t.state === 'error') {
@@ -496,6 +496,9 @@ function renderIngest(el, s) {
     } else if (r === 'auth_lost') {
       status = S.lostSession; hint = escapeHtml(S.lostSessionHint(ingest.authMode === 'email'));
       buttons.push(['ingest-retry', S.btnReconnect, 'primary']);
+    } else if (r === 'wrong_account') {
+      status = S.wrongAccount; hint = escapeHtml(S.wrongAccountHint);
+      buttons.push(['claim-open', S.account.btnReconnect, 'primary']);
     } else {
       status = S.failed(reasonText(r));
       hint = job.lastError?.message ? escapeHtml(job.lastError.message) : '';

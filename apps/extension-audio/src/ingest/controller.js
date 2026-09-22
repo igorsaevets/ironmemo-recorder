@@ -93,7 +93,13 @@ export class IngestController {
           if (ch.newValue) this.jobs.set(sid, ch.newValue); else this.jobs.delete(sid);
           this.emit(sid);
         } else if (k === CONSENT_KEY) this.consent = ch.newValue ?? null;
-        else if (k === ACCOUNT_KEY) this.emit('__account'); // the account bar re-renders (claim, sign-out, auth loss)
+        else if (k === ACCOUNT_KEY) {
+          this.auth.invalidateCache();
+          const oldUser = ch.oldValue?.user?.id ?? null;
+          const newUser = ch.newValue?.user?.id ?? null;
+          if (oldUser !== newUser) this.pauseAll('account_changed').catch(() => {});
+          this.emit('__account');
+        }
       }
     });
     try {
@@ -328,7 +334,21 @@ export class IngestController {
       if (['session', 'creating', 'create_unknown', 'uploading', 'finalizing', 'finalize_unknown'].includes(job.state)) {
         if (await this.needsEmail()) { job.pausedFrom = job.state; job.state = 'paused'; job.stateReason = 'email_required'; await save(job); log('paused', { sid, reason: 'email_required' }); return job; }
         const acc = await this.auth.ensureSession();
-        job.userId = acc.user?.id ?? null; job.accountKind = acc.kind;
+        const currentUserId = acc.user?.id ?? null;
+        if (job.userId && currentUserId && job.userId !== currentUserId) {
+          const st = await this.auth.status();
+          if (st.previousUserId === job.userId) {
+            job.userId = currentUserId; job.accountKind = acc.kind;
+          } else {
+            job.state = 'error'; job.stateReason = 'wrong_account';
+            job.lastError = { kind: 'wrong_account', message: `Job belongs to ${job.userId}, current account is ${currentUserId}`, at: Date.now() };
+            await save(job);
+            log('wrong_account', { sid, jobUserId: job.userId, currentUserId });
+            return job;
+          }
+        } else {
+          job.userId = currentUserId; job.accountKind = acc.kind;
+        }
         if (!job.workspaceId) {
           job.workspaceId = await this.resolveWorkspace(signal, job, save);
           job.createBody.workspace_id = job.workspaceId; job.stateReason = null;
@@ -513,8 +533,12 @@ export class IngestController {
         if (e?.name === 'AbortError') throw e;
         if (e instanceof ApiError && e.status === 404) {
           const st = await this.auth.status();
+          if (job.userId && st.userId && job.userId !== st.userId && st.previousUserId !== job.userId) {
+            job.authLost = { at: Date.now(), reason: 'wrong_account' };
+            job.transcript = { ...(job.transcript ?? {}), checkedAt: Date.now() };
+            await save(job); this.log('wrong_account_404', { sid, jobUserId: job.userId, currentUserId: st.userId }); return job;
+          }
           if (st.claimedAt && Date.now() - st.claimedAt < CLAIM_GRACE_MS && !job.serverDeleted) {
-            // MERGED carries the guest's rows across asynchronously (user.merged): inside the grace window a 404 means «moving»
             job.transcript = { ...(job.transcript ?? {}), checkedAt: Date.now() - REVISION_CHECK_MS + 60_000 };
             await save(job); this.log('server_copy_moving', { sid, sinceClaimMs: Date.now() - st.claimedAt });
             if (!this.movingTimer) this.movingTimer = setTimeout(() => { this.movingTimer = null; this.resumeAll().catch(() => {}); }, 60_000);
