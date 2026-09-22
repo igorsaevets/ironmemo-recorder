@@ -782,7 +782,7 @@ async function handleAction(e, session, sessionEl) {
   // ── UF4: trim ──
   // ── UF9: markers ──
   if (action === 'marker-add') { await addMarker(session, sessionEl); return; }
-  if (action === 'marker-jump') { if (activePlayer) { activePlayer.audio.currentTime = parseFloat(btn.dataset.sec); updatePlayerTime(); } return; }
+  if (action === 'marker-jump') { if (activePlayer) { const t = parseFloat(btn.dataset.sec); if (Number.isFinite(t)) { activePlayer.audio.currentTime = t; updatePlayerTime(); } } return; }
   if (action === 'marker-remove') { await removeMarker(session, parseInt(btn.dataset.index, 10), sessionEl); return; }
 
   if (action === 'trim-enter') { enterTrimMode(); return; }
@@ -1339,10 +1339,11 @@ async function onClaimVerify() {
 function renderMarkers(sessionEl, session) {
   const bar = sessionEl?.querySelector('.marker-bar');
   if (!bar) return;
-  if (!session?.markers?.length) { bar.innerHTML = ''; bar.hidden = true; return; }
-  const sorted = [...session.markers].sort((a, b) => a.sec - b.sec);
-  bar.innerHTML = sorted.map((m, i) =>
-    `<button class="btn marker-chip" data-action="marker-jump" data-sec="${m.sec}" title="${formatPlayerTime(m.sec)}">${formatPlayerTime(m.sec)}</button>` +
+  const valid = (session?.markers ?? []).filter((m) => Number.isFinite(m?.sec) && m.sec >= 0);
+  if (!valid.length) { bar.innerHTML = ''; bar.hidden = true; return; }
+  const sorted = [...valid].sort((a, b) => a.sec - b.sec);
+  bar.innerHTML = sorted.map((m) =>
+    `<button class="btn marker-chip" data-action="marker-jump" data-sec="${escapeHtml(String(m.sec))}" title="${escapeHtml(formatPlayerTime(m.sec))}">${escapeHtml(formatPlayerTime(m.sec))}</button>` +
     `<button class="btn ghost marker-remove" data-action="marker-remove" data-index="${session.markers.indexOf(m)}" title="${escapeHtml(S.markerRemoveTitle)}">&times;</button>`
   ).join('');
   bar.hidden = false;
@@ -1354,17 +1355,17 @@ async function addMarker(session, sessionEl) {
   if (!session.markers) session.markers = [];
   if (session.markers.some((m) => Math.abs(m.sec - sec) < 0.5)) return;
   session.markers.push({ sec, createdAt: Date.now() });
+  renderMarkers(sessionEl, session);
   try { await saveMeta(session.sid, { markers: session.markers }); }
   catch (e) { showStatus(`Could not save marker: ${e?.message ?? e}`, 'error'); }
-  renderMarkers(sessionEl, session);
 }
 
 async function removeMarker(session, index, sessionEl) {
   if (!session.markers || index < 0 || index >= session.markers.length) return;
   session.markers.splice(index, 1);
+  renderMarkers(sessionEl, session);
   try { await saveMeta(session.sid, { markers: session.markers.length ? session.markers : null }); }
   catch (e) { showStatus(`Could not save marker: ${e?.message ?? e}`, 'error'); }
-  renderMarkers(sessionEl, session);
 }
 
 // ── UF4: trim ──
