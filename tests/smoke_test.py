@@ -103,8 +103,8 @@ def main():
             sl = ctx.new_page()
             sl.goto(f"chrome-extension://{ext_id}/src/session-list/session-list.html")
             sl.wait_for_timeout(1500)
-            has_container = sl.locator("#sessions, .sessions, .session-list, main, body").count() > 0
-            check("session_list_renders", has_container)
+            has_list = sl.locator("#list").count() > 0
+            check("session_list_renders", has_list, f"#list present={has_list}")
 
             # 4. Permission page
             perm = ctx.new_page()
@@ -129,7 +129,8 @@ def main():
                     };
                 }""")
                 if defaults and not defaults.get("error"):
-                    schema_ok = defaults.get("engine") == "webcodecs"
+                    expected = {"engine": "webcodecs", "codec": "opus", "container": "ogg", "backend": "opfs"}
+                    schema_ok = all(defaults.get(k) == v for k, v in expected.items())
                     schema_detail = json.dumps(defaults, ensure_ascii=False)
                 else:
                     schema_detail = str(defaults)

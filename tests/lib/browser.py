@@ -45,6 +45,7 @@ def find_chrome_for_testing() -> Path | None:
     if not CFT_ROOT.exists():
         return None
     builds = sorted(CFT_ROOT.glob("win64-*/chrome-win64/chrome.exe"))
+    builds += sorted(CFT_ROOT.glob("chrome/win64-*/chrome-win64/chrome.exe"))
     builds += sorted(CFT_ROOT.glob("*/chrome-*/chrome"))
     return builds[-1] if builds else None
 

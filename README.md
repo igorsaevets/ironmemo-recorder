@@ -39,7 +39,7 @@ Requires Python 3.12+ and Chrome for Testing 152+.
 ```
 pip install -r tests/requirements.txt
 playwright install chromium
-npx @puppeteer/browsers install chrome@152 --install-dir runs/chrome-for-testing
+npx @puppeteer/browsers install chrome@152 --path runs/chrome-for-testing
 ```
 
 **Smoke test** — verifies extension loads and all pages render:
