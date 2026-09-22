@@ -41,7 +41,7 @@
  *   requires    условие показа: {key, equals|notEquals|includes}
  */
 
-export const SETTINGS_SCHEMA_VERSION = '0.4.0';
+export const SETTINGS_SCHEMA_VERSION = '0.5.0';
 
 export const GROUPS = [
   { id: 'source',     title: 'Источники звука',            order: 10 },
@@ -628,7 +628,7 @@ export const SETTINGS = [
     readback: 'navigator.storage.estimate()',
   },
   {
-    key: 'storage.retentionDays', group: 'storage', type: 'int', stage: 'mvp',
+    key: 'storage.retentionDays', group: 'storage', type: 'int', stage: 'debug',
     label: 'Хранить локально, дней (0 = бессрочно)', default: 0, min: 0, max: 365, step: 1,
     why: 'Retention control — требование privacy-раздела и аргумент в описании для магазина.',
     readback: null,
@@ -729,7 +729,7 @@ export const SETTINGS = [
     readback: null,
   },
   {
-    key: 'upload.deleteLocalAfterUpload', group: 'upload', type: 'bool', stage: 'mvp',
+    key: 'upload.deleteLocalAfterUpload', group: 'upload', type: 'bool', stage: 'debug',
     label: 'Удалять локальную копию после отправки', default: false,
     risk: 'ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО НАМЕРЕННО. Успешный HTTP 200 не означает, что запись уцелела '
         + 'на другой стороне. Оригинал удаляется только по явному решению человека.',
@@ -738,7 +738,7 @@ export const SETTINGS = [
 
   // ─────────────────────────────────────── СОГЛАСИЕ И ИНДИКАЦИЯ ──
   {
-    key: 'consent.recordingIndicator', group: 'consent', type: 'enum', stage: 'mvp',
+    key: 'consent.recordingIndicator', group: 'consent', type: 'enum', stage: 'experiment',
     label: 'Индикатор записи', default: 'always',
     options: [
       { value: 'always', label: 'Всегда виден' },
@@ -756,7 +756,7 @@ export const SETTINGS = [
     decides: 'ADR-009', readback: null,
   },
   {
-    key: 'consent.requireAcknowledgement', group: 'consent', type: 'bool', stage: 'mvp',
+    key: 'consent.requireAcknowledgement', group: 'consent', type: 'bool', stage: 'experiment',
     label: 'Подтверждение ответственности перед первой записью', default: true,
     decides: 'ADR-009', readback: null,
   },
@@ -792,7 +792,7 @@ export const SETTINGS = [
     readback: null,
   },
   {
-    key: 'telemetry.enabled', group: 'experiment', type: 'bool', stage: 'mvp',
+    key: 'telemetry.enabled', group: 'experiment', type: 'bool', stage: 'experiment',
     label: 'Отправлять анонимную статистику', default: false,
     why: 'Выключено по умолчанию. Включается только явным действием и только после отдельного раскрытия '
        + 'в карточке магазина.',
