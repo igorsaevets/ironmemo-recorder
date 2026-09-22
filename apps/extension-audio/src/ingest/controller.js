@@ -140,6 +140,7 @@ export class IngestController {
   }
   /** Sign out = pause running uploads, server logout (best effort) + local wipe; completed jobs remember why the server copy is out of reach. */
   async signOut() {
+    this.auth.invalidateCache();
     for (const sid of [...this.running.keys()]) await this.pause(sid, 'signed_out');
     const r = await this.claim.signOut();
     for (const job of [...this.jobs.values()]) {
