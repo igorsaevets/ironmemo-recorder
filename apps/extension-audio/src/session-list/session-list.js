@@ -886,7 +886,7 @@ const SAVE_TYPES = {
   txt:  { description: 'Text File', accept: { 'text/plain': ['.txt'] } },
   json: { description: 'JSON File', accept: { 'application/json': ['.json'] } },
   md:   { description: 'Markdown', accept: { 'text/markdown': ['.md'] } },
-  srt:  { description: 'Subtitles', accept: { 'text/plain': ['.srt'] } },
+  srt:  { description: 'Subtitles', accept: { 'application/x-subrip': ['.srt'] } },
 };
 
 // Accepts a Blob/File OR an async function that returns one.
