@@ -19,7 +19,7 @@ Record meetings, lectures, interviews — no bot joins the call, nothing leaves 
 • Records while the popup is closed — your meeting is not interrupted
 • Recovers audio after a Chrome crash (power-loss recovery is designed but not yet fully tested)
 • Lets you play, rename, trim, and download recordings from a built-in session list
-• Add timeline markers during a recording for quick navigation later
+• Add timeline markers during playback for quick navigation later
 • Choose which microphone to use
 • Live level meter shows whether your mic is actually picking up sound
 
@@ -65,7 +65,7 @@ Source code (MIT): https://github.com/igorsaevets/ironmemo-recorder
 • Запись продолжается при закрытом попапе — совещание не прерывается
 • Восстанавливает аудио после краша Chrome (восстановление после отключения питания спроектировано, но пока не полностью протестировано)
 • Встроенный список сессий: воспроизведение, переименование, обрезка и скачивание записей
-• Маркеры на временной шкале — расставляйте прямо во время записи для быстрой навигации
+• Маркеры на временной шкале — расставляйте во время воспроизведения для быстрой навигации
 • Выбор микрофона
 • Индикатор уровня в реальном времени показывает, работает ли микрофон
 
@@ -138,8 +138,10 @@ Source code (MIT): https://github.com/igorsaevets/ironmemo-recorder
   "legal, medical, HR" calls while privacy declares no health data. Removed in this
   draft to avoid the tension. Igor can add back if desired.
 
-- **tab.url access without activeTab**: Agy flagged that `tab.url` may be undefined
-  at runtime because neither `tabs` nor `activeTab` is declared. If true, meeting
-  platform detection (zoom/meet/teams) is dead code — all tab recordings get `other`.
-  Needs a runtime test before submission. If `activeTab` is added, CWS listing must
-  disclose web browsing activity collection per Limited Use Item 4.
+- **tab.url confirmed undefined at runtime (2026-09-28)**: Tested on CfT 152 —
+  `tab.url` is not present in the Tab object without `tabs` or `activeTab` permission.
+  Platform detection (zoom/meet/teams) is dead code; all tab recordings get `other`.
+  Privacy policy §3 updated to remove the platform enum. The detection code remains
+  (safe fallback to `other`) and will activate if `activeTab` is added in a future
+  version. No manifest change or zip rebuild needed for this submission.
+  Test results: `runs/tab-url-test-results.json`.
