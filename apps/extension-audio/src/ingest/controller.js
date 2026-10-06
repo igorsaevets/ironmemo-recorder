@@ -19,7 +19,8 @@
  */
 
 import { createLog } from './log.js';
-import { createApi, PATHS, ApiError, TransportError, AuthLostError } from './api.js';
+import { createApi, PATHS, ApiError, TransportError, AuthLostError, ClientRefusal } from './api.js';
+import { pickWorkspace } from './workspace.js';
 import { createAuth, hardenStorage, ACCOUNT_KEY } from './auth.js';
 import { createClaim, CLAIM_GRACE_MS } from './claim.js';
 import * as ledger from './ledger.js';
@@ -423,29 +424,29 @@ export class IngestController {
   }
 
   /**
-   * The guest's personal workspace is created asynchronously after enrolment (stapel-auth
-   * `auth.user.enrolled` milestone → workspaces service). Measured 2026-09-13: spike-01 had it
-   * on the first read; spike-02, under a slow production, did not get it within 20 s. So: up to
+   * The workspace is chosen the way the web app chooses it (workspace.js). An EMPTY list means
+   * "not yet": a guest's personal workspace is created asynchronously after enrolment (stapel-auth
+   * `auth.user.enrolled` milestone → workspaces service). Measured 2026-09-13: spike-01 had it on
+   * the first read; spike-02, under a slow production, did not get it within 20 s. So: up to
    * ~2 minutes, with the job visibly in `workspace_wait`.
    */
   async resolveWorkspace(signal, job = null, save = null) {
     const started = Date.now();
     for (let attempt = 0; attempt < 30; attempt++) {
       const data = await withRetry(() => this.api.get(PATHS.workspaces, { signal }), { signal, log: this.log, what: 'workspaces' });
-      const items = Array.isArray(data?.workspaces) ? data.workspaces : [];
-      const ids = new Set(items.map((w) => String(w?.id)).filter((x) => x && x !== 'undefined'));
-      // Measured on prod for a fresh guest (spike-01): default/preferred ids are EMPTY STRINGS and
-      // the list holds exactly one personal workspace — so the single-item fallback is the norm.
-      const chosen = [data?.default_workspace_id, data?.preferred_workspace_id].find((x) => typeof x === 'string' && x.length > 0) ?? null;
-      if (chosen && ids.has(chosen)) return chosen;
-      if (ids.size === 1) return [...ids][0];
-      if (ids.size > 1) throw new ApiError({ status: 200, message: 'Several workspaces and no default — cannot choose one.', path: PATHS.workspaces });
+      const pick = pickWorkspace(data);
+      if (pick) {
+        this.log('workspace_chosen', { source: pick.source, type: pick.type, count: pick.count, id8: pick.id.slice(0, 8) });
+        // Kept for the Recordings page: with several workspaces it names the one the recording went to.
+        if (job) job.workspace = { source: pick.source, type: pick.type, name: pick.name, count: pick.count };
+        return pick.id;
+      }
       if (Date.now() - started > 120_000) break;
       this.log('workspace_wait', { attempt: attempt + 1, waitedMs: Date.now() - started });
       if (job && save && job.stateReason !== 'workspace_wait') { job.stateReason = 'workspace_wait'; await save(job); }
       await sleep(Math.min(6000, 2000 + attempt * 500), signal);
     }
-    throw new ApiError({ status: 200, message: 'IronMemo did not prepare a workspace for the guest within 2 minutes — try again later.', path: PATHS.workspaces });
+    throw new ClientRefusal('IronMemo did not prepare a workspace for this account within 2 minutes.', 'no_workspace');
   }
 
   /** create_unknown → find the recording by this job's unique title; adopt it, else create anew. */
@@ -460,7 +461,7 @@ export class IngestController {
     } else if (matches.length === 0) {
       job.state = 'creating'; job.stateReason = null; await save(job);
     } else {
-      throw new ApiError({ status: 200, message: `${matches.length} recordings carry this title on the server — cannot pick one safely.`, path: PATHS.recordings });
+      throw new ClientRefusal(`${matches.length} recordings carry this title on the server — cannot pick one safely.`, 'ambiguous_create');
     }
   }
 
@@ -477,7 +478,9 @@ export class IngestController {
       if (prev !== rec.status) this.log('status', { status: rec.status, poll: job.pollCount });
       if (TERMINAL.has(rec.status)) {
         job.timings.completedAt = Date.now();
-        job.meetingPage = `${this.origin}${PATHS.meetingPage(job.recordingId)}`;
+        // `?workspace=` opens the web app in the recording's workspace (src/api/workspace-context.tsx
+        // URL_PARAM, iron-note-frontend origin/main 3044935): a per-tab context there, never saved.
+        job.meetingPage = `${this.origin}${PATHS.meetingPage(job.recordingId)}${job.workspaceId ? `?workspace=${encodeURIComponent(job.workspaceId)}` : ''}`;
         if (rec.status === 'completed') {
           job.state = 'completed'; job.stateReason = null;
           await save(job);

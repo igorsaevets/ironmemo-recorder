@@ -23,7 +23,7 @@
  * Never logged: any credential value. Only lengths and ids.
  */
 
-import { PATHS, ApiError, TransportError, AuthLostError, clientTag } from './api.js';
+import { PATHS, ApiError, TransportError, AuthLostError, ClientRefusal, clientTag } from './api.js';
 import { maskEmail } from './claim.js';
 
 export const ACCOUNT_KEY = 'ironmemo.account.v1';
@@ -132,7 +132,7 @@ export function createAuth({ apiOrigin, log = () => {} }) {
     const res = await postPlain(PATHS.anonymous, { device_id });
     if (!res.ok) throw await ApiError.fromResponse(res, PATHS.anonymous);
     const data = await res.json();
-    if (!validPair(data?.tokens)) throw new ApiError({ status: res.status, message: 'anonymous: missing token pair', path: PATHS.anonymous });
+    if (!validPair(data?.tokens)) throw new ClientRefusal('anonymous: missing token pair', 'shape');
     const acc = {
       kind: data.user?.is_anonymous === false ? 'user' : 'guest',
       apiOrigin, refresh: data.tokens.refresh, device_id,
@@ -153,7 +153,7 @@ export function createAuth({ apiOrigin, log = () => {} }) {
    */
   async function adoptSession(data, { via = 'email', emailMasked = null } = {}) {
     await hardenStorage();
-    if (!validPair(data?.tokens)) throw new ApiError({ status: 200, message: 'verify: missing token pair', path: PATHS.emailVerify });
+    if (!validPair(data?.tokens)) throw new ClientRefusal('verify: missing token pair', 'shape');
     const device_id = await deviceId();
     const prev = await loadAccount();
     const u = data.user ?? {};
@@ -218,7 +218,7 @@ export function createAuth({ apiOrigin, log = () => {} }) {
       }
       if (!res.ok) throw await ApiError.fromResponse(res, PATHS.refresh);
       const pair = await res.json();
-      if (!validPair(pair)) throw new ApiError({ status: res.status, message: 'refresh: bad token pair', path: PATHS.refresh });
+      if (!validPair(pair)) throw new ClientRefusal('refresh: bad token pair', 'shape');
       await saveAccount({ ...acc, refresh: pair.refresh, rotated_at: Date.now() });
       await saveAccess({ access: pair.access, apiOrigin, userId: acc.user?.id ?? null, obtained_at: Date.now() });
       log('auth.refreshed', { reason, userId: acc.user?.id ?? null });

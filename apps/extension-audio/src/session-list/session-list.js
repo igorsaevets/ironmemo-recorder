@@ -482,6 +482,8 @@ function renderIngest(el, s) {
     if (job.meetingPage && !job.serverDeleted) {
       hint += ` <a href="${escapeHtml(job.meetingPage)}" target="_blank" rel="noopener">${escapeHtml(S.openOnIronMemo)}</a> ${escapeHtml(S.openCaveat)}`;
     }
+    // Only an account with several workspaces needs to be told which one holds the recording.
+    if (job.workspace?.count > 1 && job.workspace.name && !job.serverDeleted) hint += ` ${escapeHtml(S.workspaceSavedIn(job.workspace.name))}`;
     if (job.recordingId && !job.serverDeleted && !job.authLost && !running) buttons.push(['delete-server', S.btnDeleteServer, 'danger']);
     if (job.serverDeleted && !sessionCapturing) buttons.push(['transcribe', S.btnTranscribeAgain, '']);
   } else if (st === 'error') {
@@ -503,7 +505,8 @@ function renderIngest(el, s) {
       buttons.push(['claim-open', S.account.btnReconnect, 'primary']);
     } else {
       status = S.failed(reasonText(r));
-      hint = job.lastError?.message ? escapeHtml(job.lastError.message) : '';
+      const human = S.reasonHints[r];
+      hint = human ? escapeHtml(human) : (job.lastError?.message ? escapeHtml(job.lastError.message) : '');
       if (!NO_RETRY.includes(r)) buttons.push(['ingest-retry', S.btnRetry, 'primary']);
     }
     buttons.push(['ingest-cancel', S.btnDismiss, 'danger']);

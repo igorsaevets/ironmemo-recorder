@@ -87,6 +87,18 @@ export class AuthLostError extends Error {
   }
 }
 
+/**
+ * The extension itself stops: the server answered, but not with something it can act on. Its
+ * own `kind` names the case, and strings.js gives each kind a sentence. Before 2.1.1 these were
+ * thrown as ApiError({status: 200}), which classified as `ok` and showed «Failed: ok».
+ */
+export class ClientRefusal extends Error {
+  constructor(message, kind) {
+    super(message);
+    this.name = 'ClientRefusal'; this.kind = kind;
+  }
+}
+
 export function classify(status) {
   if (status === 401) return 'auth';
   if (status === 402) return 'payment';
