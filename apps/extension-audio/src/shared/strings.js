@@ -141,6 +141,8 @@ export const S = Object.freeze({
     export_failed: 'the server could not render the export',
     export_timeout: 'the export was not ready in time',
     forbidden: 'IronMemo refused this for your account',
+    client: 'IronMemo did not accept the request',
+    conflict: 'IronMemo reported a conflict with this recording',
     no_workspace: 'IronMemo has not set up a workspace for this account yet',
     ambiguous_create: 'IronMemo holds several copies of this recording',
     // Jobs that failed on 2.1.0 carry the reason `ok` (a client-side refusal thrown as HTTP 200).
@@ -148,7 +150,8 @@ export const S = Object.freeze({
   }),
   // What to do next, for reasons whose technical message would mean nothing to a person.
   reasonHints: Object.freeze({
-    no_workspace: 'A new IronMemo account gets its workspace within seconds. Wait a minute, then press Retry.',
+    no_workspace: 'The extension waited 2 minutes for it. Press Retry to wait again.',
+    shape: 'IronMemo sent an answer the extension could not use. Press Retry later.',
     ambiguous_create: 'The connection dropped while the recording was being created, and the server kept more than one copy. Delete the extra copies on IronMemo, then press Retry.',
     ok: 'Press Retry to send it again.',
   }),

@@ -405,6 +405,8 @@ function renderRoleRow(role, g) {
 
 const PREVIEW_LINES = 20;
 const NO_RETRY = ['too_large', 'too_long', 'unsupported', 'no_mix', 'multi_segment', 'no_file', 'recovered_invalid', 'payment', 'insufficient_credits', 'wrong_account'];
+// create_unknown reasons where the server DID answer the check (controller.js resolveUnknownCreate).
+const CHECK_REFUSED = ['ambiguous_create', 'forbidden', 'not_found', 'client'];
 const expandedSids = new Set();               // transcript panels the user expanded ("Show all")
 const transcriptTextCache = new Map();        // sid → {sha, body: string[]} (transcript.txt minus the header)
 
@@ -433,7 +435,13 @@ function renderIngest(el, s) {
     if (job.stateReason === 'workspace_wait') hint = escapeHtml(S.workspaceWait);
     buttons.push(['ingest-cancel', S.btnCancel, 'danger']);
   } else if (st === 'create_unknown') {
-    cls = 'error'; status = S.createUnknown; hint = escapeHtml(S.createUnknownHint);
+    cls = 'error';
+    const r = job.stateReason;
+    // The server answered the check, but not with one recording: name what it said.
+    if (CHECK_REFUSED.includes(r)) {
+      status = S.failed(reasonText(r));
+      hint = escapeHtml(S.reasonHints[r] ?? job.lastError?.message ?? S.createUnknownHint);
+    } else { status = S.createUnknown; hint = escapeHtml(S.createUnknownHint); }
     buttons.push(['ingest-retry', S.btnRetry, 'primary'], ['ingest-cancel', S.btnCancel, 'danger']);
   } else if (st === 'uploading') {
     const total = job.asset?.bytes ?? 0;

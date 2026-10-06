@@ -11,8 +11,12 @@
  * stapel-workspaces 0.33.0 (dto.py, WorkspaceListResponse) fixes the order of the two ids: "a
  * client resolves preferred first and the instance default only after it". Both arrive as "" when
  * unset or when the membership behind them is not active. The list itself is ordered by the server
- * (views.py: `-last_accessed_at, -invited_at`), and both clients read the same list, so they land on
- * the same row.
+ * (views.py:555 `-last_accessed_at, -invited_at`; PostgreSQL puts NULLs FIRST in a DESC sort, so a
+ * never-opened membership comes before an opened one). Both clients apply the same tail of the chain
+ * to the same list. They can still land on different rows: the web app's three first steps (explicit
+ * pick, URL, its localStorage pointer) are invisible here, its PUT of the preference is
+ * fire-and-forget, and the order moves whenever a workspace is opened (`GET <id>/` stamps
+ * last_accessed_at, which dto.py:84 calls telemetry, not a choice). Panel P300-5b, 2026-10-06.
  *
  * Production 2026-10-05: an account with four `work` and two `personal` workspaces and both ids
  * empty. Before this module the extension refused such accounts ("Several workspaces and no

@@ -35,6 +35,8 @@ export const CONSENT_TEXT_ID = 'cloud-en-v2-email';
 export const DEFAULT_API_BASE = 'https://app.ironmemo.com';
 const TERMINAL = new Set(['completed', 'error', 'deleted']);
 const RESUMABLE = new Set(['session', 'creating', 'create_unknown', 'uploading', 'finalizing', 'finalize_unknown', 'processing']);
+/** Failure reasons after which Retry picks the workspace again (only while no recording exists on the server). */
+const REPICK_WORKSPACE = new Set(['forbidden', 'not_found', 'no_workspace', 'ok']);
 /** A `queued` older than this is its own UI state: measured 2026-09-13, a 3-hour silent stall with no error on any route. */
 export const WAIT_LONG_MS = 10 * 60 * 1000;
 /** How often a stored transcript is checked against the server's updated_at (a paid unlock reprocesses the recording). */
@@ -283,10 +285,16 @@ export class IngestController {
       try {
         if (job.state === 'paused') { job.state = job.pausedFrom ?? (job.uploadId ? 'uploading' : 'session'); job.pausedFrom = null; }
         else if (job.state === 'error') {
-          if (job.stateReason === 'auth_lost' && this.authMode === 'guest') { await this.auth.logout(); job.state = 'session'; job.userId = null; job.workspaceId = null; job.recordingId = null; job.uploadId = null; job.parts = []; job.singlePut = null; job.transport = null; }
+          if (job.stateReason === 'auth_lost' && this.authMode === 'guest') { await this.auth.logout(); job.state = 'session'; job.userId = null; job.workspaceId = null; job.workspace = null; job.recordingId = null; job.uploadId = null; job.parts = []; job.singlePut = null; job.transport = null; }
           else if (job.uploadId) job.state = job.completeIntentAt ? 'finalizing' : 'uploading';
           else if (job.recordingId) job.state = 'uploading';
-          else job.state = 'session';
+          else {
+            // Nothing exists on the server yet, so the workspace may be chosen again — and must be when
+            // the refusal concerns it (access removed, workspace deleted, an empty list, 2.1.0's `ok`):
+            // retrying with the same id would repeat the same refusal forever.
+            if (REPICK_WORKSPACE.has(job.stateReason)) { job.workspaceId = null; job.workspace = null; job.createBody.workspace_id = null; }
+            job.state = 'session';
+          }
         }
         job.stateReason = null;
         await ledger.putJob(job); this.jobs.set(sid, job); this.emit(sid);
@@ -412,7 +420,10 @@ export class IngestController {
       job.lastError = errInfo(e); job.attempts = (job.attempts ?? 0) + 1;
       if (e instanceof AuthLostError) { job.state = 'error'; job.stateReason = 'auth_lost'; }
       else if (e instanceof AssetError) { job.state = 'error'; job.stateReason = e.reason; }
-      else if (job.state !== 'create_unknown' && job.state !== 'finalize_unknown') { job.state = 'error'; job.stateReason = e.kind ?? e.name; }
+      // An unknown create/finalize stays unknown (Retry must check the server first), but it keeps the
+      // reason the check failed — `ambiguous_create` or a refused list — so the page can say it.
+      else if (job.state === 'create_unknown' || job.state === 'finalize_unknown') job.stateReason = e.kind ?? e.name;
+      else { job.state = 'error'; job.stateReason = e.kind ?? e.name; }
       await save(job);
       log('job_failed', { sid, state: job.state, reason: job.stateReason, kind: e.kind ?? e.name, status: e.status ?? null, message: e.message });
       return job;
