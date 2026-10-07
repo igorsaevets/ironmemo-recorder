@@ -91,7 +91,7 @@ async function boot() {
           ingest.readAllowance({ maxAgeMs: 5000 }).catch((e) => console.warn('[session-list] allowance', e));
           return;
         }
-        if (sid === '__allowance') { renderAccount().catch((e) => console.warn('[session-list] account bar', e)); return; }
+        if (sid === '__allowance') { renderAccount().catch((e) => console.warn('[session-list] account bar', e)); dropToppedUpStops(); return; }
         const el = document.querySelector(`.session[data-sid="${cssEscape(sid)}"]`);
         const s = sessionsById.get(sid);
         if (el && s) renderIngest(el, s);
@@ -122,7 +122,8 @@ async function boot() {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'visible') return;
       ingest.checkParkedAll({ minAgeMs: 5000 }).catch((e) => console.warn('[session-list] parked check', e));
-      ingest.readAllowance({ maxAgeMs: 30_000 }).catch((e) => console.warn('[session-list] allowance', e));
+      // P300-3b: an open price stop sends people to top up in the web app — their return re-reads after 5 s, not 30
+      ingest.readAllowance({ maxAgeMs: quoteAsk.size ? 5000 : 30_000 }).catch((e) => console.warn('[session-list] allowance', e));
     });
     setInterval(() => {
       if (document.visibilityState !== 'visible') return;
@@ -506,7 +507,9 @@ function renderIngest(el, s) {
       cls = 'warn'; status = S.needsPayment;
       hint = escapeHtml(S.needsPaymentHint);
       if (job.meetingPage) hint += ` ${escapeHtml(S.openCaveat)}`;
-      if (job.parked?.checkedAt) hint += ` ${escapeHtml(S.needsPaymentChecked(formatClock(job.parked.checkedAt)))}`;
+      // P300-3b: a check that never reached the server says so — «Last checked» alone read as «still unpaid»
+      // (a lost session has its own banner below, and checkParkedAll skips it until the account is back)
+      if (job.parked?.checkedAt) hint += ` ${escapeHtml((job.parked.lastError && !job.authLost ? S.needsPaymentCheckFailed : S.needsPaymentChecked)(formatClock(job.parked.checkedAt)))}`;
       if (job.authLost) banners.push(['error', escapeHtml(job.authLost.reason === 'wrong_account' ? S.wrongAccount : S.lostSession)]);
       if (job.meetingPage) buttons.push(['open-link', S.btnPayOnIronMemo, 'primary', job.meetingPage]);
       buttons.push(['check-parked', running ? S.checkingParked : S.btnCheckAgain, '']);
@@ -758,6 +761,17 @@ async function quoteThenStart(session, { confirmed = false } = {}) {
     if (kind) { quoteAsk.set(sid, { ...q, kind }); rerender(sid); return; }
   }
   await startIngest(session, q);
+}
+
+/**
+ * P300-3b: a price stop computed with a smaller balance than the account holds now (a top-up in the web app — the
+ * stop's own «Top up on IronMemo» leads there) is dropped: the row offers Transcribe again, which asks the price anew.
+ * A lower balance keeps the stop: it is still true, and an unknown balance proves nothing.
+ */
+function dropToppedUpStops() {
+  const bal = ingest?.allowance?.balance;
+  if (bal == null) return;
+  for (const [sid, ask] of quoteAsk) if (ask.balance != null && bal > ask.balance) { quoteAsk.delete(sid); rerender(sid); }
 }
 
 async function startIngest(session, quote = null) {

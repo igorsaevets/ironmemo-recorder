@@ -73,8 +73,27 @@ function clamp(n, lo, hi) { const x = Number(n); return Number.isFinite(x) ? Mat
  */
 function parkReason(rec) { return rec?.failed_insufficient_credits ? 'insufficient_credits' : 'payment_required'; }
 
-/** P300-3: a price read that takes longer than this is dropped and the upload goes ahead (the server still decides). */
+/**
+ * P300-3: a price read (and, P300-3b, an account-line read) that takes longer than this is dropped; a dropped price
+ * never blocks the upload (the server still decides).
+ */
 export const QUOTE_TIMEOUT_MS = 8000;
+
+const DEADLINE = Symbol('deadline');
+/**
+ * P300-3b: run `work(signal)` with its fetches aborted after `ms`; DEADLINE when it has still not settled a second
+ * later. The second lets aborted fetches settle, so the halves that did answer are kept; the race itself covers what
+ * ignores the signal — the session check and a token refresh (auth.js postPlain).
+ */
+async function withDeadline(work, ms) {
+  const ctl = new AbortController();
+  let abortTimer, giveUpTimer;
+  const late = new Promise((resolve) => {
+    abortTimer = setTimeout(() => { ctl.abort(); giveUpTimer = setTimeout(() => resolve(DEADLINE), 1000); }, ms);
+  });
+  try { return await Promise.race([work(ctl.signal), late]); }
+  finally { clearTimeout(abortTimer); clearTimeout(giveUpTimer); }
+}
 
 /** A JSON count (credits, seconds), or null. An absent field is unknown, never zero (the web app's readFreeMinutes rule). */
 function count(v) { return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null; }
@@ -87,12 +106,16 @@ function count(v) { return typeof v === 'number' && Number.isFinite(v) && v >= 0
  *              10 minutes is answered `covered_by: plan` without asking the meter or the wallet (entitlement.py
  *              entitlement_for, origin/main 4fc0423; measured 2026-10-07), while the conversion asks both and
  *              billing charges every completed run (iron-billing actions.py debit_for_completed_recording).
+ * P300-3b: a wallet of 0 is 'wait' whatever the cap: at conversion the free remainder is billable too, and a balance
+ * that buys under the minimum usable length is refused and parks — no preview (affordability.py verdict_for,
+ * affordable_seconds(0) = 0; free_cap.py _preflight_cap, origin/main 4fc0423).
  * Null = go ahead. `email_required` is the claim dialog's job, not a price.
  */
 export function quoteShortfall(q) {
   if (!q || q.reason === 'email_required') return null;
-  if (q.fullLength === false) return (q.capSeconds ?? 0) > 0 ? 'partial' : 'wait';
-  if (q.balance != null && q.creditsRequired != null && q.balance < q.creditsRequired) return 'short';
+  const empty = q.balance === 0;
+  if (q.fullLength === false) return !empty && (q.capSeconds ?? 0) > 0 ? 'partial' : 'wait';
+  if (q.balance != null && q.creditsRequired != null && q.balance < q.creditsRequired) return empty ? 'wait' : 'short';
   return null;
 }
 
@@ -220,17 +243,22 @@ export class IngestController {
     if (prev && maxAgeMs > 0 && Date.now() - prev.at < maxAgeMs) return prev;
     if (this.allowanceInflight) return this.allowanceInflight;
     this.allowanceInflight = (async () => {
-      const st = await this.auth.status();
-      if (!st.hasAccount || !(await this.hasPermission())) { if (this.allowance) this.setAllowance(null); return null; }
-      const [w, m] = await Promise.allSettled([this.api.get(PATHS.wallet), this.api.get(PATHS.entitlement)]);
-      const wallet = w.status === 'fulfilled' ? w.value : null;
-      const meter = m.status === 'fulfilled' ? m.value : null;
-      const a = {
-        at: Date.now(), balance: count(wallet?.balance), debt: count(wallet?.debt_outstanding),
-        remainingSeconds: count(meter?.remaining_seconds), freeCapSeconds: count(meter?.free_cap_seconds),
-        reason: typeof meter?.reason === 'string' ? meter.reason : null,
-      };
-      this.log('allowance', { wallet: !!wallet, meter: !!meter, balance: a.balance, remaining: a.remainingSeconds, reason: a.reason });
+      // P300-3b: bounded — a read that never settles would hold allowanceInflight, and every later read with it
+      const a = await withDeadline(async (signal) => {
+        const st = await this.auth.status();
+        if (!st.hasAccount || !(await this.hasPermission())) return null;
+        const [w, m] = await Promise.allSettled([this.api.get(PATHS.wallet, { signal }), this.api.get(PATHS.entitlement, { signal })]);
+        const wallet = w.status === 'fulfilled' ? w.value : null;
+        const meter = m.status === 'fulfilled' ? m.value : null;
+        return {
+          at: Date.now(), balance: count(wallet?.balance), debt: count(wallet?.debt_outstanding),
+          remainingSeconds: count(meter?.remaining_seconds), freeCapSeconds: count(meter?.free_cap_seconds),
+          reason: typeof meter?.reason === 'string' ? meter.reason : null,
+        };
+      }, QUOTE_TIMEOUT_MS);
+      if (a === DEADLINE) { this.log('allowance', { timeout: true }); return this.allowance; } // the next trigger reads again
+      if (!a) { if (this.allowance) this.setAllowance(null); return null; }
+      this.log('allowance', { balance: a.balance, remaining: a.remainingSeconds, reason: a.reason });
       this.setAllowance(a);
       return a;
     })().finally(() => { this.allowanceInflight = null; });
@@ -248,30 +276,31 @@ export class IngestController {
   async quote(durationSec) {
     const n = Number(durationSec);
     if (!Number.isFinite(n) || n <= 0) return null;
-    const st = await this.auth.status();
-    if (!st.hasAccount || !(await this.hasPermission())) return null;
     const secs = Math.max(1, Math.ceil(n));
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), QUOTE_TIMEOUT_MS);
-    try {
+    // P300-3b: the deadline covers the session check and a token refresh too — the row waits on this with no button
+    const out = await withDeadline(async (signal) => {
+      const st = await this.auth.status();
+      if (!st.hasAccount || !(await this.hasPermission())) return null;
       const [qr, wr] = await Promise.allSettled([
-        this.api.get(`${PATHS.entitlement}?duration_seconds=${secs}`, { signal: ctl.signal }),
-        this.api.get(PATHS.wallet, { signal: ctl.signal }),
+        this.api.get(`${PATHS.entitlement}?duration_seconds=${secs}`, { signal }),
+        this.api.get(PATHS.wallet, { signal }),
       ]);
       const q = qr.status === 'fulfilled' ? qr.value : null;
       const wallet = wr.status === 'fulfilled' ? wr.value : null;
       if (wallet && this.allowance) this.setAllowance({ ...this.allowance, at: Date.now(), balance: count(wallet.balance), debt: count(wallet.debt_outstanding) });
       if (count(q?.credits_required) == null) { this.log('quote_unavailable', { secs, error: qr.status === 'rejected' ? errInfo(qr.reason) : null }); return null; }
-      const out = {
+      const res = {
         at: Date.now(), durationSeconds: secs, creditsRequired: count(q.credits_required),
         balance: count(q.credits_balance) ?? count(wallet?.balance),
         coveredBy: typeof q.covered_by === 'string' ? q.covered_by : null,
         fullLength: typeof q.full_length_allowed === 'boolean' ? q.full_length_allowed : null,
         capSeconds: count(q.cap_seconds), reason: typeof q.reason === 'string' ? q.reason : null,
       };
-      this.log('quote', { secs, credits: out.creditsRequired, balance: out.balance, coveredBy: out.coveredBy, fullLength: out.fullLength, cap: out.capSeconds, stop: quoteShortfall(out) });
-      return out;
-    } finally { clearTimeout(timer); }
+      this.log('quote', { secs, credits: res.creditsRequired, balance: res.balance, coveredBy: res.coveredBy, fullLength: res.fullLength, cap: res.capSeconds, stop: quoteShortfall(res) });
+      return res;
+    }, QUOTE_TIMEOUT_MS);
+    if (out === DEADLINE) { this.log('quote_unavailable', { secs, error: { kind: 'timeout' } }); return null; }
+    return out;
   }
 
   // ── entry points used by the page ────────────────────────────────────────────────────

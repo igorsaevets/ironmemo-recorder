@@ -9,7 +9,9 @@
  * (free_cap.cap_seconds of original_duration_seconds) and the client never invents a counter. P300-3:
  * the account line shows the server's balance and remaining free seconds as read, and a price only as the
  * server quotes it (`allowance`, `quote` below). Measured 2026-10-07: the server charges credits for every
- * completed recording, inside the free minutes too — so no string here calls a recording "free".
+ * completed recording, inside the free minutes too. Owner ruling 2026-10-07 (P300-20, closed): the "10 free
+ * minutes" copy means the free credits an account is granted, so it stays as written; the price strings
+ * below still never call one recording free.
  */
 
 export const S = Object.freeze({
@@ -116,6 +118,7 @@ export const S = Object.freeze({
   needsPayment: 'Waiting for payment — IronMemo paused this transcription.',
   needsPaymentHint: 'The account has no free minutes or credits left for this recording. The file is stored on IronMemo and intact: pay for it there and the transcription starts again by itself — nothing to upload again. This page checks again when you come back to it.',
   needsPaymentChecked: (clock) => `Last checked at ${clock}.`,
+  needsPaymentCheckFailed: (clock) => `The check at ${clock} got no answer from IronMemo; this page tries again when you come back to it.`,
   btnPayOnIronMemo: 'Pay on IronMemo',
   btnCheckAgain: 'Check again',
   checkingParked: 'Checking…',
