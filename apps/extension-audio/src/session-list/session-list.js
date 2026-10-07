@@ -17,7 +17,7 @@
 
 import { loadSettings } from '../shared/settings-store.js';
 import { getByPath } from '../shared/settings-schema.js';
-import { IngestController, waitingSince } from '../ingest/controller.js';
+import { IngestController, waitingSince, PARKED } from '../ingest/controller.js';
 import { FILES, isTranscriptFile, formatStamp } from '../ingest/transcript.js';
 import { S, reasonText } from '../shared/strings.js';
 import { isPlausibleEmail } from '../ingest/claim.js';
@@ -106,6 +106,14 @@ async function boot() {
   focusHashSession(); // I4b task 4: the popup's line opens this page on #sid=<session>
   if (ingest && !new URLSearchParams(location.search).has('readonly')) {
     ingest.resumeAll().catch((e) => console.warn('[session-list] resume failed', e));
+    // P300-2: a parked recording is re-read when the user comes back to this tab (people pay in the web app)
+    // and, while the page is visible, at most once a minute per recording; never while the page is hidden.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') ingest.checkParkedAll({ minAgeMs: 5000 }).catch((e) => console.warn('[session-list] parked check', e));
+    });
+    setInterval(() => {
+      if (document.visibilityState === 'visible') ingest.checkParkedAll().catch((e) => console.warn('[session-list] parked check', e));
+    }, 15_000);
   }
 }
 
@@ -472,6 +480,23 @@ function renderIngest(el, s) {
       hint = escapeHtml(running ? S.processingHint(job.pollCount ?? 0) : S.processingHintIdle);
       if (!running) buttons.push(['ingest-resume', S.btnCheckStatus, '']);
     }
+  } else if (st === PARKED) {
+    // P300-2: parked by the pipeline until the account pays. The server re-queues it by itself after a
+    // top-up, so there is no Retry and no Dismiss here: «Transcribe again» would upload a second copy that
+    // gets billed beside the parked one.
+    if (job.serverDeleted) {
+      cls = 'muted'; status = S.serverDeleted;
+      if (!sessionCapturing) buttons.push(['transcribe', S.btnTranscribeAgain, '']);
+    } else {
+      cls = 'warn'; status = S.needsPayment;
+      hint = escapeHtml(S.needsPaymentHint);
+      if (job.meetingPage) hint += ` ${escapeHtml(S.openCaveat)}`;
+      if (job.parked?.checkedAt) hint += ` ${escapeHtml(S.needsPaymentChecked(formatClock(job.parked.checkedAt)))}`;
+      if (job.authLost) banners.push(['error', escapeHtml(job.authLost.reason === 'wrong_account' ? S.wrongAccount : S.lostSession)]);
+      if (job.meetingPage) buttons.push(['open-link', S.btnPayOnIronMemo, 'primary', job.meetingPage]);
+      buttons.push(['check-parked', running ? S.checkingParked : S.btnCheckAgain, '']);
+      if (job.recordingId && !running) buttons.push(['delete-server', S.btnDeleteServer, 'danger']);
+    }
   } else if (st === 'completed') {
     cls = 'ok';
     const dur = job.server?.duration_seconds;
@@ -728,6 +753,10 @@ async function handleAction(e, session, sessionEl) {
   // ── I4b ──
   if (action === 'check-now') {
     if (ingest) { try { await ingest.checkNow(session.sid); } catch (err) { showStatus(err?.message ?? String(err), 'error'); } }
+    rerender(session.sid); return;
+  }
+  if (action === 'check-parked') {
+    if (ingest && !ingest.isRunning(session.sid)) { try { await ingest.checkParked(session.sid); } catch (err) { showStatus(err?.message ?? String(err), 'error'); } }
     rerender(session.sid); return;
   }
   if (action === 'fetch-transcript') {

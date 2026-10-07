@@ -90,7 +90,15 @@ export const S = Object.freeze({
   needsCredits: 'Needs credits — the recording was not transcribed.',
   needsCreditsHint: 'IronMemo refused this recording because the account has no credits for it. The audio is kept on the server; add credits on IronMemo, then try again.',
   btnOpenIronMemo: 'Open IronMemo',
-  networkError: 'No connection to IronMemo.',
+  // P300-2: parked until paid (`needs_payment`, backend since 2026-09-14). Wording follows the web app's own
+  // copy for the same state (iron-note-frontend i18n-keys.en.json app.meeting-detail.needs-payment-*).
+  needsPayment: 'Waiting for payment — IronMemo paused this transcription.',
+  needsPaymentHint: 'The account has no free minutes or credits left for this recording. The file is stored on IronMemo and intact: pay for it there and the transcription starts again by itself — nothing to upload again. This page checks again when you come back to it.',
+  needsPaymentChecked: (clock) => `Last checked at ${clock}.`,
+  btnPayOnIronMemo: 'Pay on IronMemo',
+  btnCheckAgain: 'Check again',
+  checkingParked: 'Checking…',
+  networkError:'No connection to IronMemo.',
   networkErrorHint: 'Check your internet connection, then Retry. Nothing was lost: the upload continues from the last confirmed part.',
   tooLarge: 'The file is larger than IronMemo accepts.',
   lostSession: 'Your IronMemo session is no longer valid.',

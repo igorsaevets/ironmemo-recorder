@@ -34,7 +34,16 @@ export const CONSENT_VERSION = 2;
 export const CONSENT_TEXT_ID = 'cloud-en-v2-email';
 export const DEFAULT_API_BASE = 'https://app.ironmemo.com';
 const TERMINAL = new Set(['completed', 'error', 'deleted']);
-const RESUMABLE = new Set(['session', 'creating', 'create_unknown', 'uploading', 'finalizing', 'finalize_unknown', 'processing']);
+/**
+ * P300-2: the pipeline PARKS a recording the account cannot pay for (backend since 2026-09-14: status
+ * `needs_payment`). Neither terminal nor progress: a top-up re-queues it on the server by itself
+ * (iron-recordings actions.py payment_completed, origin/main 4fc0423), so the job leaves the poll loop
+ * and the page re-reads it on its own triggers (page open, return to the tab, a slow timer while visible).
+ */
+export const PARKED = 'needs_payment';
+/** A parked job is re-read at most this often by the page's timer (and never while the page is hidden). */
+export const PARKED_RECHECK_MS = 60 * 1000;
+const RESUMABLE =new Set(['session', 'creating', 'create_unknown', 'uploading', 'finalizing', 'finalize_unknown', 'processing']);
 /** Failure reasons after which Retry picks the workspace again (only while no recording exists on the server). */
 const REPICK_WORKSPACE = new Set(['forbidden', 'not_found', 'no_workspace', 'ok']);
 /** A `queued` older than this is its own UI state: measured 2026-09-13, a 3-hour silent stall with no error on any route. */
@@ -56,6 +65,13 @@ function errInfo(e) {
 }
 
 function clamp(n, lo, hi) { const x = Number(n); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : lo; }
+
+/**
+ * Why a recording is parked. The DTO names only the credits case (`failed_insufficient_credits`, views.py
+ * _failed_for_credits); a park raised before billing answered carries the free-minutes reason instead and
+ * reads false there (free_cap.py _preflight_cap). Both mean the same to the user: it waits for a payment.
+ */
+function parkReason(rec) { return rec?.failed_insufficient_credits ? 'insufficient_credits' : 'payment_required'; }
 
 function stampUtc(ms) {
   const d = ms ? new Date(ms) : new Date();
@@ -177,14 +193,16 @@ export class IngestController {
     if (await this.needsEmail()) { const e = new Error('Verify your e-mail first — the free minutes are granted per account.'); e.kind = 'email_required'; throw e; }
     const existing = this.jobs.get(sid);
     if (existing && this.running.has(sid)) return existing;
-    if (existing?.state === 'completed') return existing;
+    // A job whose server copy was deleted is over: «Transcribe again» starts a NEW recording. Before P300-2
+    // start() handed the old job back here, so that button did nothing after «Delete on server».
+    if (existing?.state === 'completed' && !existing.serverDeleted) return existing;
 
     const lease = await ledger.acquireLease(sid);
     if (!lease.ok) throw new Error('Another Recordings tab is already handling this recording.');
 
     try {
       let job;
-      if (existing?.recordingId && existing.state !== 'cancelled') {
+      if (existing?.recordingId && existing.state !== 'cancelled' && !existing.serverDeleted) {
         job = { ...existing, state: existing.pausedFrom ?? existing.state, pausedFrom: null };
         if (job.state === 'paused' || job.state === 'error') job.state = job.uploadId ? 'uploading' : 'session';
       } else {
@@ -245,6 +263,11 @@ export class IngestController {
       const needFetch = !t || t.state !== 'stored';
       const needCheck = t?.state === 'stored' && Date.now() - (t.checkedAt ?? 0) > REVISION_CHECK_MS;
       if (needFetch || needCheck) out.push(this.syncCompleted(job.sessionId));
+    }
+    // P300-2: a parked job — one status read per page open (a top-up re-queues it on the server).
+    for (const job of [...this.jobs.values()]) {
+      if (!acct.hasAccount || job.state !== PARKED || job.localDeleted || job.serverDeleted || this.running.has(job.sessionId)) continue;
+      out.push(this.checkParked(job.sessionId));
     }
     if (blocked && !this.resumeTimer) {
       this.resumeTimer = setTimeout(() => { this.resumeTimer = null; this.resumeAll().catch(() => {}); }, 10_000);
@@ -476,6 +499,12 @@ export class IngestController {
     }
   }
 
+  /** `?workspace=` opens the web app in the recording's workspace (src/api/workspace-context.tsx URL_PARAM,
+   *  iron-note-frontend origin/main 3044935): a per-tab context there, never saved. */
+  meetingPageUrl(job) {
+    return `${this.origin}${PATHS.meetingPage(job.recordingId)}${job.workspaceId ? `?workspace=${encodeURIComponent(job.workspaceId)}` : ''}`;
+  }
+
   async poll(job, signal, save) {
     let wait = 5000;
     job.pollCount ??= 0;
@@ -487,11 +516,18 @@ export class IngestController {
       job.server = summarizeRecording(rec);
       job.timings.firstStatusAt ??= Date.now();
       if (prev !== rec.status) this.log('status', { status: rec.status, poll: job.pollCount });
+      if (rec.status === PARKED) {
+        // The meeting page is where the web app sells the top-up for THIS recording (its needs_payment dialog).
+        job.meetingPage = this.meetingPageUrl(job);
+        job.state = PARKED; job.stateReason = parkReason(rec);
+        job.parked = { since: Date.now(), checkedAt: Date.now(), checks: 0, lastError: null };
+        await save(job);
+        this.log('parked', { status: rec.status, reason: job.stateReason, poll: job.pollCount });
+        return;
+      }
       if (TERMINAL.has(rec.status)) {
         job.timings.completedAt = Date.now();
-        // `?workspace=` opens the web app in the recording's workspace (src/api/workspace-context.tsx
-        // URL_PARAM, iron-note-frontend origin/main 3044935): a per-tab context there, never saved.
-        job.meetingPage = `${this.origin}${PATHS.meetingPage(job.recordingId)}${job.workspaceId ? `?workspace=${encodeURIComponent(job.workspaceId)}` : ''}`;
+        job.meetingPage = this.meetingPageUrl(job);
         if (rec.status === 'completed') {
           job.state = 'completed'; job.stateReason = null;
           await save(job);
@@ -627,6 +663,71 @@ export class IngestController {
     if (!job || job.state !== 'processing') return job ?? null;
     if (this.running.has(sid)) await this.pause(sid, 'check_now');
     return this.resume(sid);
+  }
+
+  /**
+   * P300-2: one status read of a parked job. Still `needs_payment` → remember the check. Anything else (a
+   * top-up re-queued it, staff unparked it, it failed or was deleted) → back to `processing`; the normal poll
+   * handles queued / completed / error / deleted from there. One read, no retry loop: the page's next
+   * trigger is the retry.
+   */
+  async checkParked(sid, { minAgeMs = 0 } = {}) {
+    const job = this.jobs.get(sid);
+    if (!job || job.state !== PARKED || job.localDeleted || job.serverDeleted || !job.recordingId || this.running.has(sid)) return job ?? null;
+    if (minAgeMs && Date.now() - (job.parked?.checkedAt ?? 0) < minAgeMs) return job;
+    const lease = await ledger.acquireLease(sid);
+    if (!lease.ok) return job;
+    const abort = new AbortController();
+    const signal = abort.signal;
+    this.running.set(sid, { abort, release: lease.release });
+    this.emit(sid);
+    const save = async (j) => { this.jobs.set(sid, j); await ledger.putJob(j); this.emit(sid); };
+    const mark = (lastError) => { job.parked = { ...(job.parked ?? {}), checkedAt: Date.now(), checks: (job.parked?.checks ?? 0) + 1, lastError }; };
+    try {
+      let rec;
+      try {
+        rec = await this.api.get(PATHS.recording(job.recordingId), { signal });
+      } catch (e) {
+        if (e?.name === 'AbortError') throw e;
+        mark(errInfo(e));
+        if (e instanceof ApiError && e.status === 404) {
+          // the same reading as syncCompleted: another account, a merge still carrying the rows across, or gone
+          const st = await this.auth.status();
+          if (job.userId && st.userId && job.userId !== st.userId && st.previousUserId !== job.userId) job.authLost = { at: Date.now(), reason: 'wrong_account' };
+          else if (!(st.claimedAt && Date.now() - st.claimedAt < CLAIM_GRACE_MS)) job.serverDeleted = { at: Date.now(), reason: 'not_found' };
+        } else if (e instanceof AuthLostError) job.authLost = { at: Date.now() };
+        await save(job);
+        this.log('parked_check_failed', { sid, kind: e.kind ?? e.name, status: e.status ?? null });
+        return job;
+      }
+      job.server = summarizeRecording(rec); job.authLost = null;
+      mark(null);
+      if (rec.status === PARKED) { job.stateReason = parkReason(rec); await save(job); return job; }
+      this.log('unparked', { sid, status: rec.status, parkedMs: Date.now() - (job.parked?.since ?? Date.now()), checks: job.parked?.checks });
+      job.state = 'processing'; job.stateReason = null; job.timings.processingSince = Date.now();
+      await save(job);
+      const transferred = this.running.get(sid)?.release;
+      this.running.delete(sid);
+      return this.run(sid, transferred);
+    } catch (e) {
+      if (e?.name !== 'AbortError') this.log('parked_check_error', { sid, message: String(e?.message ?? e).slice(0, 200) });
+      return this.jobs.get(sid) ?? job;
+    } finally {
+      const entry = this.running.get(sid);
+      if (entry?.abort === abort) { this.running.delete(sid); if (entry.release) entry.release(); }
+      this.emit(sid);
+    }
+  }
+
+  /**
+   * The page's own triggers (the user returns to the tab, the timer while the page is visible): re-read every
+   * parked job not read within `minAgeMs`. A job whose session was lost waits for page open or the button.
+   */
+  async checkParkedAll({ minAgeMs = PARKED_RECHECK_MS } = {}) {
+    const due = [...this.jobs.values()].filter((j) => j.state === PARKED && !j.localDeleted && !j.serverDeleted && !j.authLost && !this.running.has(j.sessionId));
+    if (!due.length || !this.hasConsent() || !(await this.hasPermission())) return [];
+    if (!(await this.auth.status()).hasAccount) return [];
+    return Promise.all(due.map((j) => this.checkParked(j.sessionId, { minAgeMs })));
   }
 
   /** DELETE the server copy (soft-delete + erasure on the server); the local files stay. */
