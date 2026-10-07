@@ -5,10 +5,11 @@
  * until that layer exists). Parametrised strings are functions.
  *
  * Product rule (Igor, 2026-09-13): 10 free minutes of transcription per ACCOUNT, not per recording.
- * The server today trims EACH recording at its own cap (recordings_ext/entitlement.py, origin/main
- * 6720f51) — so the cap banner describes only what the DTO says (free_cap.cap_seconds of
- * original_duration_seconds) and the client never invents a per-account counter; remaining minutes
- * are shown only when the API returns them (it does not yet).
+ * Since 2026-09-14 the server meters them per account; the cap banner describes only what the DTO says
+ * (free_cap.cap_seconds of original_duration_seconds) and the client never invents a counter. P300-3:
+ * the account line shows the server's balance and remaining free seconds as read, and a price only as the
+ * server quotes it (`allowance`, `quote` below). Measured 2026-10-07: the server charges credits for every
+ * completed recording, inside the free minutes too — so no string here calls a recording "free".
  */
 
 export const S = Object.freeze({
@@ -17,6 +18,26 @@ export const S = Object.freeze({
   idleHint: 'Sends this one recording to your IronMemo account. 10 free minutes per account.',
   btnTranscribe: 'Transcribe with IronMemo',
   btnTranscribeAgain: 'Transcribe again',
+
+  // ── P300-3: the account line and the price of one recording (server numbers only) ──
+  allowance: Object.freeze({
+    credits: (n) => `Credits: ${n}`,
+    debt: (n) => `${n} owed`,
+    freeLeft: (mmss) => `${mmss} of free minutes left`, // the web app's own wording (free-minutes-line)
+    freeUsedUp: 'Free minutes are used up',
+  }),
+  quote: Object.freeze({
+    checking: 'Checking with IronMemo what this recording costs…',
+    partial: 'Only part of this recording would be transcribed',
+    partialHint: (cap, n, b) => `IronMemo would transcribe up to the first ${cap}: all of it costs about ${n} credits${b == null ? '' : ` and the account has ${b}`}. Top up first to get all of it, or send it now and unlock the rest later on IronMemo.`,
+    wait: 'This recording would wait for payment',
+    waitHint: (n, b) => `It costs about ${n} credits${b == null ? '' : ` and the account has ${b}`}. Sent now, it waits on IronMemo and starts by itself after a top-up — nothing to upload again.`,
+    short: 'Not enough credits for all of this recording',
+    shortHint: (n, b) => `It costs about ${n} credits and the account has ${b}. IronMemo may transcribe only part of it, or keep it waiting until a top-up.`,
+    btnSendAnyway: 'Send anyway',
+    btnTopUp: 'Top up on IronMemo',
+    sent: (n, b) => `About ${n} credits for this recording${b == null ? '' : ` (the account had ${b})`}.`,
+  }),
 
   // ── in flight ──
   stateText: Object.freeze({

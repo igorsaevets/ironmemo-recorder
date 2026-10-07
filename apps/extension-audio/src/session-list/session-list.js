@@ -17,7 +17,7 @@
 
 import { loadSettings } from '../shared/settings-store.js';
 import { getByPath } from '../shared/settings-schema.js';
-import { IngestController, waitingSince, PARKED } from '../ingest/controller.js';
+import { IngestController, waitingSince, PARKED, quoteShortfall } from '../ingest/controller.js';
 import { FILES, isTranscriptFile, formatStamp } from '../ingest/transcript.js';
 import { S, reasonText } from '../shared/strings.js';
 import { isPlausibleEmail } from '../ingest/claim.js';
@@ -62,6 +62,9 @@ let activePlayer = null;           // UF3: { audio, blobUrl, sid, role, el, seek
 let playSeq = 0;                   // monotonic counter — guards against rapid-click races in startPlayback
 let trimState = null;              // UF4: { startSec, endSec, previewing }
 let filterTimer = null;            // UF6b: debounce for search input
+const quoteAsk = new Map();        // P300-3: sid → the server's price that the account cannot cover (the row asks first)
+const quoting = new Set();         // P300-3: sids whose price is being read right now
+const IN_FLIGHT = new Set(['session', 'creating', 'uploading', 'finalizing', 'processing']);
 
 boot().catch((e) => showStatus(`Failed to load the list: ${e?.message ?? e}`, 'error'));
 
@@ -83,7 +86,12 @@ async function boot() {
     try {
       ingest = await new IngestController({ settings }).init();
       ingest.subscribe((sid) => {
-        if (sid === '__account') { renderAccount().then(rerenderAll).catch((e) => console.warn('[session-list] account bar', e)); return; }
+        if (sid === '__account') {
+          renderAccount().then(rerenderAll).catch((e) => console.warn('[session-list] account bar', e));
+          ingest.readAllowance({ maxAgeMs: 5000 }).catch((e) => console.warn('[session-list] allowance', e));
+          return;
+        }
+        if (sid === '__allowance') { renderAccount().catch((e) => console.warn('[session-list] account bar', e)); return; }
         const el = document.querySelector(`.session[data-sid="${cssEscape(sid)}"]`);
         const s = sessionsById.get(sid);
         if (el && s) renderIngest(el, s);
@@ -108,11 +116,18 @@ async function boot() {
     ingest.resumeAll().catch((e) => console.warn('[session-list] resume failed', e));
     // P300-2: a parked recording is re-read when the user comes back to this tab (people pay in the web app)
     // and, while the page is visible, at most once a minute per recording; never while the page is hidden.
+    // P300-3: the account line (credits + free minutes) is read on open, on return to the tab (30-s floor: people
+    // top up in the web app) and at most once a minute while the page is visible — never while it is hidden.
+    ingest.readAllowance().catch((e) => console.warn('[session-list] allowance', e));
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') ingest.checkParkedAll({ minAgeMs: 5000 }).catch((e) => console.warn('[session-list] parked check', e));
+      if (document.visibilityState !== 'visible') return;
+      ingest.checkParkedAll({ minAgeMs: 5000 }).catch((e) => console.warn('[session-list] parked check', e));
+      ingest.readAllowance({ maxAgeMs: 30_000 }).catch((e) => console.warn('[session-list] allowance', e));
     });
     setInterval(() => {
-      if (document.visibilityState === 'visible') ingest.checkParkedAll().catch((e) => console.warn('[session-list] parked check', e));
+      if (document.visibilityState !== 'visible') return;
+      ingest.checkParkedAll().catch((e) => console.warn('[session-list] parked check', e));
+      ingest.readAllowance({ maxAgeMs: 60_000 }).catch((e) => console.warn('[session-list] allowance', e));
     }, 15_000);
   }
 }
@@ -554,6 +569,21 @@ function renderIngest(el, s) {
     status = `State: ${st}`;
   }
 
+  // P300-3: wherever this row offers «Transcribe», the price read on the click can stop it first — only when the
+  // server's own numbers say the account cannot pay for all of it (quoteShortfall). The choice stays the user's.
+  const offersTranscribe = buttons.some(([a]) => a === 'transcribe');
+  const ask = offersTranscribe ? quoteAsk.get(s.sid) : null;
+  if (ask) {
+    const n = ask.creditsRequired, b = ask.balance;
+    cls = 'warn'; status = S.quote[ask.kind];
+    hint = escapeHtml(ask.kind === 'partial' ? S.quote.partialHint(formatDuration(ask.capSeconds), n, b) : ask.kind === 'wait' ? S.quote.waitHint(n, b) : S.quote.shortHint(n, b));
+    buttons.splice(0, buttons.length, ['quote-go', S.quote.btnSendAnyway, 'primary'], ['open-link', S.quote.btnTopUp, '', ingest.topUpUrl()], ['quote-cancel', S.btnCancel, '']);
+  } else if (offersTranscribe && quoting.has(s.sid)) {
+    hint = escapeHtml(S.quote.checking);
+    buttons.splice(0, buttons.length, ...buttons.filter(([a]) => a !== 'transcribe'));
+  }
+  if (job?.quote?.creditsRequired != null && IN_FLIGHT.has(st)) banners.push(['muted', escapeHtml(S.quote.sent(job.quote.creditsRequired, job.quote.balance))]);
+
   const btnHtml = buttons.map(([action, label, k, href]) => (href
     ? `<a class="btn ${k}" data-action="${action}" href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>`
     : `<button class="btn ${k}" data-action="${action}">${escapeHtml(label)}</button>`)).join('');
@@ -692,14 +722,48 @@ async function onTranscribeClick(session) {
   if (!ingest.hasConsent()) { showConsent(session); return; }
   const granted = await ingest.requestPermission(); // first await → still inside the gesture
   if (!granted) { showStatus(S.notGranted, 'error'); return; }
-  if (await ingest.needsEmail()) { showClaim({ reason: 'transcribe', session, after: () => startIngest(session) }); return; }
-  await startIngest(session);
+  if (await ingest.needsEmail()) {
+    // P300-3: the account line's reads can find a revoked session at page open, before any job — offer Reconnect then
+    const lost = (await ingest.accountStatus()).lost;
+    showClaim({ reason: lost ? 'reconnect' : 'transcribe', session, after: () => quoteThenStart(session) });
+    return;
+  }
+  await quoteThenStart(session);
 }
 
-async function startIngest(session) {
+/**
+ * P300-3: read the server's price for this recording, then send it — or, when the account cannot pay for all of it,
+ * stop and say what IronMemo would do (only part / wait for payment / short). `confirmed` = «Send anyway».
+ * A price that cannot be read never blocks the upload: the server still decides at conversion.
+ */
+async function quoteThenStart(session, { confirmed = false } = {}) {
+  const sid = session.sid;
+  if (quoting.has(sid)) return;
+  let q = null;
+  if (confirmed) {
+    q = quoteAsk.get(sid) ?? null;
+    quoteAsk.delete(sid);
+  } else {
+    quoteAsk.delete(sid);
+    quoting.add(sid); rerender(sid);
+    try { q = await ingest.quote(session.durationSec); } catch (e) { console.warn('[session-list] quote', e); }
+    finally { quoting.delete(sid); }
+    if (!q && (await ingest.accountStatus()).lost) {
+      // the price read met a revoked session (401 + refresh 401): reconnect first, create nothing until the account is back
+      rerender(sid);
+      showClaim({ reason: 'reconnect', session, after: () => quoteThenStart(session) });
+      return;
+    }
+    const kind = quoteShortfall(q);
+    if (kind) { quoteAsk.set(sid, { ...q, kind }); rerender(sid); return; }
+  }
+  await startIngest(session, q);
+}
+
+async function startIngest(session, quote = null) {
   try {
     $('status').hidden = true;
-    await ingest.start(session);
+    await ingest.start(session, { quote });
   } catch (e) {
     showStatus(`Cannot send this recording: ${e?.message ?? e}`, 'error');
   }
@@ -725,6 +789,8 @@ async function handleAction(e, session, sessionEl) {
 
   if (action === 'rename') { handleRename(session, sessionEl); return; }
   if (action === 'transcribe') { await onTranscribeClick(session); return; }
+  if (action === 'quote-go') { if (ingest) await quoteThenStart(session, { confirmed: true }); return; }
+  if (action === 'quote-cancel') { quoteAsk.delete(session.sid); rerender(session.sid); return; }
   if (action === 'ingest-resume' || action === 'ingest-retry') {
     if (!ingest) return;
     const granted = await ingest.requestPermission(); // sync call inside the click → user gesture
@@ -1197,8 +1263,10 @@ async function renderAccount() {
   else if (!st.hasAccount) { cls = 'none'; text = S.account.none; btns.push(['claim-open', S.account.btnAddEmail, 'primary']); }
   else if (st.kind === 'user') { cls = 'user'; text = S.account.user(st.emailMasked ?? '…'); hint = S.account.userHint; btns.push(['sign-out', S.account.btnSignOut, 'ghost']); }
   else { cls = 'guest'; text = S.account.guest; btns.push(['claim-open', S.account.btnAddEmail, 'primary']); }
+  const allow = st.hasAccount && !st.lost ? allowanceText() : '';
   bar.className = `account ${cls}`;
-  bar.innerHTML = `<div class="account-text">${escapeHtml(text)}${hint ? `<div class="account-hint">${escapeHtml(hint)}</div>` : ''}</div>`
+  bar.innerHTML = `<div class="account-text">${escapeHtml(text)}${hint ? `<div class="account-hint">${escapeHtml(hint)}</div>` : ''}`
+    + `${allow ? `<div class="account-hint account-allowance">${escapeHtml(allow)}</div>` : ''}</div>`
     + `<div class="account-actions">${btns.map(([a, label, k]) => `<button class="btn ${k}" data-account-action="${a}">${escapeHtml(label)}</button>`).join('')}</div>`;
   bar.hidden = false;
   bar.onclick = async (e) => {
@@ -1213,6 +1281,22 @@ async function renderAccount() {
       await renderAccount(); rerenderAll();
     }
   };
+}
+
+/**
+ * P300-3: «Credits: 137 · 3:20 of free minutes left», each half only when the server answered it (an unknown
+ * balance is not zero). Exhausted is its own sentence — "0:00 left" states the problem and offers nothing.
+ */
+function allowanceText() {
+  const a = ingest?.allowance;
+  if (!a) return '';
+  const parts = [];
+  if (a.balance != null) parts.push(S.allowance.credits(a.balance) + (a.debt ? ` (${S.allowance.debt(a.debt)})` : ''));
+  if (a.remainingSeconds != null) {
+    const t = Math.ceil(a.remainingSeconds);
+    parts.push(t > 0 ? S.allowance.freeLeft(`${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`) : S.allowance.freeUsedUp);
+  }
+  return parts.join(' · ');
 }
 
 /** The popup's line opens this page on #sid=<session>: scroll there and mark it for a few seconds (task 4). */

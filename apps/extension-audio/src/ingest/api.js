@@ -5,6 +5,7 @@
  *   auth        /auth/api/v1/…               WITH trailing slash
  *   workspaces  /workspaces/api/v1/
  *   recordings  /recordings/api/recordings…  WITHOUT trailing slash (with slash → 404)
+ *   billing     /billing/api/v1/wallet       (P300-3, measured 2026-10-07: 200 with this Bearer token)
  * Error envelope: {localizable_error, error, params}.
  *
  * Rules adopted from the independent review (CODEX.md Q1/Q2, ADR-008 «Уточнения»):
@@ -35,7 +36,9 @@ export const PATHS = Object.freeze({
   exports: (id) => `/recordings/api/recordings/${id}/exports`,
   exportDetail: (exportId) => `/recordings/api/exports/${exportId}`,
   entitlement: '/recordings/api/entitlement',
+  wallet: '/billing/api/v1/wallet',
   meetingPage: (id) => `/app/meetings/${id}`,
+  billingPage: '/app/settings/billing', // the web app's top-up page (iron-note-frontend free-minutes-line.tsx)
 });
 
 /** The server answered with a non-2xx status. `kind` drives retry/UI decisions. */

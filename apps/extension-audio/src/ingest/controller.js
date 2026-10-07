@@ -73,6 +73,29 @@ function clamp(n, lo, hi) { const x = Number(n); return Number.isFinite(x) ? Mat
  */
 function parkReason(rec) { return rec?.failed_insufficient_credits ? 'insufficient_credits' : 'payment_required'; }
 
+/** P300-3: a price read that takes longer than this is dropped and the upload goes ahead (the server still decides). */
+export const QUOTE_TIMEOUT_MS = 8000;
+
+/** A JSON count (credits, seconds), or null. An absent field is unknown, never zero (the web app's readFreeMinutes rule). */
+function count(v) { return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null; }
+
+/**
+ * P300-3: does the server's price for one recording warrant a stop before the upload? Server numbers only.
+ * - 'partial': the server says not in full and names the seconds it would process (the free remainder);
+ * - 'wait':    not in full and nothing to process → the recording parks in needs_payment (P300-2);
+ * - 'short':   the server said "in full", but the wallet holds less than the price. Every length up to the plan's
+ *              10 minutes is answered `covered_by: plan` without asking the meter or the wallet (entitlement.py
+ *              entitlement_for, origin/main 4fc0423; measured 2026-10-07), while the conversion asks both and
+ *              billing charges every completed run (iron-billing actions.py debit_for_completed_recording).
+ * Null = go ahead. `email_required` is the claim dialog's job, not a price.
+ */
+export function quoteShortfall(q) {
+  if (!q || q.reason === 'email_required') return null;
+  if (q.fullLength === false) return (q.capSeconds ?? 0) > 0 ? 'partial' : 'wait';
+  if (q.balance != null && q.creditsRequired != null && q.balance < q.creditsRequired) return 'short';
+  return null;
+}
+
 function stampUtc(ms) {
   const d = ms ? new Date(ms) : new Date();
   return d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
@@ -96,6 +119,8 @@ export class IngestController {
     this.jobs = new Map();
     this.running = new Map();
     this.listeners = new Set();
+    this.allowance = null;          // P300-3: {at, balance, debt, remainingSeconds, freeCapSeconds, reason} from the server
+    this.allowanceInflight = null;
     this.consent = null;
     this.limits = null;
   }
@@ -160,6 +185,7 @@ export class IngestController {
   /** Sign out = pause running uploads, server logout (best effort) + local wipe; completed jobs remember why the server copy is out of reach. */
   async signOut() {
     this.auth.invalidateCache();
+    this.setAllowance(null);
     for (const sid of [...this.running.keys()]) await this.pause(sid, 'signed_out');
     const r = await this.claim.signOut();
     for (const job of [...this.jobs.values()]) {
@@ -181,12 +207,80 @@ export class IngestController {
   getJob(sid) { return this.jobs.get(sid) ?? null; }
   isRunning(sid) { return this.running.has(sid); }
 
+  // ── P300-3: what the account has left, and what one recording costs (server numbers only) ──────
+  /**
+   * The account line: the wallet's balance (GET /billing/api/v1/wallet) and the free-minutes meter
+   * (GET /recordings/api/entitlement without a duration). Never a local counter: a failed read or an absent
+   * field leaves that half out — an unknown balance is not a zero balance. A read younger than `maxAgeMs`
+   * is reused; one read at a time. Measured 2026-10-07 on the test account: every completed recording is
+   * charged in credits, inside the free minutes too, so the balance is the number that decides.
+   */
+  async readAllowance({ maxAgeMs = 0 } = {}) {
+    const prev = this.allowance;
+    if (prev && maxAgeMs > 0 && Date.now() - prev.at < maxAgeMs) return prev;
+    if (this.allowanceInflight) return this.allowanceInflight;
+    this.allowanceInflight = (async () => {
+      const st = await this.auth.status();
+      if (!st.hasAccount || !(await this.hasPermission())) { if (this.allowance) this.setAllowance(null); return null; }
+      const [w, m] = await Promise.allSettled([this.api.get(PATHS.wallet), this.api.get(PATHS.entitlement)]);
+      const wallet = w.status === 'fulfilled' ? w.value : null;
+      const meter = m.status === 'fulfilled' ? m.value : null;
+      const a = {
+        at: Date.now(), balance: count(wallet?.balance), debt: count(wallet?.debt_outstanding),
+        remainingSeconds: count(meter?.remaining_seconds), freeCapSeconds: count(meter?.free_cap_seconds),
+        reason: typeof meter?.reason === 'string' ? meter.reason : null,
+      };
+      this.log('allowance', { wallet: !!wallet, meter: !!meter, balance: a.balance, remaining: a.remainingSeconds, reason: a.reason });
+      this.setAllowance(a);
+      return a;
+    })().finally(() => { this.allowanceInflight = null; });
+    return this.allowanceInflight;
+  }
+  setAllowance(a) { this.allowance = a; this.emit('__allowance'); }
+  topUpUrl() { return `${this.origin}${PATHS.billingPage}`; }
+
+  /**
+   * quote(durationSec): the server's price for a recording of this length, asked right before an upload —
+   * GET /recordings/api/entitlement?duration_seconds=N, plus the wallet, because the server leaves the balance
+   * out whenever the plan answers first. Null when it cannot be asked or does not answer in QUOTE_TIMEOUT_MS:
+   * a missing price never blocks an upload; the server decides at conversion (a park → P300-2).
+   */
+  async quote(durationSec) {
+    const n = Number(durationSec);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const st = await this.auth.status();
+    if (!st.hasAccount || !(await this.hasPermission())) return null;
+    const secs = Math.max(1, Math.ceil(n));
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), QUOTE_TIMEOUT_MS);
+    try {
+      const [qr, wr] = await Promise.allSettled([
+        this.api.get(`${PATHS.entitlement}?duration_seconds=${secs}`, { signal: ctl.signal }),
+        this.api.get(PATHS.wallet, { signal: ctl.signal }),
+      ]);
+      const q = qr.status === 'fulfilled' ? qr.value : null;
+      const wallet = wr.status === 'fulfilled' ? wr.value : null;
+      if (wallet && this.allowance) this.setAllowance({ ...this.allowance, at: Date.now(), balance: count(wallet.balance), debt: count(wallet.debt_outstanding) });
+      if (count(q?.credits_required) == null) { this.log('quote_unavailable', { secs, error: qr.status === 'rejected' ? errInfo(qr.reason) : null }); return null; }
+      const out = {
+        at: Date.now(), durationSeconds: secs, creditsRequired: count(q.credits_required),
+        balance: count(q.credits_balance) ?? count(wallet?.balance),
+        coveredBy: typeof q.covered_by === 'string' ? q.covered_by : null,
+        fullLength: typeof q.full_length_allowed === 'boolean' ? q.full_length_allowed : null,
+        capSeconds: count(q.cap_seconds), reason: typeof q.reason === 'string' ? q.reason : null,
+      };
+      this.log('quote', { secs, credits: out.creditsRequired, balance: out.balance, coveredBy: out.coveredBy, fullLength: out.fullLength, cap: out.capSeconds, stop: quoteShortfall(out) });
+      return out;
+    } finally { clearTimeout(timer); }
+  }
+
   // ── entry points used by the page ────────────────────────────────────────────────────
   /**
    * start(session): consent + permission must already hold. `session` comes from the
-   * Recordings page: {sid, files, report, recovery, status, startedAt}.
+   * Recordings page: {sid, files, report, recovery, status, startedAt}. `opts.quote` = the price the page read
+   * just before (P300-3); a new job keeps it so its row can say what the recording costs while it travels.
    */
-  async start(session) {
+  async start(session, opts = {}) {
     const sid = session.sid;
     if (!this.hasConsent()) throw new Error('Cloud processing has not been accepted yet.');
     if (!(await this.hasPermission())) throw new Error(`Access to ${this.origin} was not granted.`);
@@ -208,6 +302,8 @@ export class IngestController {
       } else {
         const asset = pickAsset(session); // throws AssetError with a user-facing message
         job = this.newJob(session, asset);
+        const q = opts.quote;
+        if (q?.creditsRequired != null) job.quote = { creditsRequired: q.creditsRequired, balance: q.balance ?? null, at: q.at ?? Date.now() };
       }
       await ledger.putJob(job); this.jobs.set(sid, job); this.emit(sid);
       return this.run(sid, lease.release);
