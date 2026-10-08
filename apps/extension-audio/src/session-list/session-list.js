@@ -699,8 +699,10 @@ function wireConsentDialog() {
       const s = pendingConsentSession; pendingConsentSession = null;
       if (!granted) { showStatus(S.notGrantedRetry, 'error'); if (s) rerender(s.sid); return; }
       if (s && await isCaptureActive(s.sid)) { showStatus(S.transcribeBlockedActive, 'error'); if (s) rerender(s.sid); return; }
-      if (s && await ingest.needsEmail()) { showClaim({ reason: 'transcribe', session: s, after: () => startIngest(s) }); return; } // product rule «б»: the e-mail before the first upload
-      if (s) await startIngest(s);
+      // P300-17: the first transcription comes through here too — it asks the price like every later one (the
+      // production run of 2.2.0 found this path going straight to the upload)
+      if (s && await ingest.needsEmail()) { showClaim({ reason: 'transcribe', session: s, after: () => quoteThenStart(s) }); return; } // product rule «б»: the e-mail before the first upload
+      if (s) await quoteThenStart(s);
     } catch (e) {
       hideConsent();
       showStatus(`Could not start: ${e?.message ?? e}`, 'error');
