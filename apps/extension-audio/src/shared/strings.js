@@ -14,6 +14,9 @@
  * below still never call one recording free.
  */
 
+/** «1 credit», «2 credits»: the server's count with its noun (P300-17: every short recording read «About 1 credits»). */
+const credits = (n) => `${n} credit${n === 1 ? '' : 's'}`;
+
 export const S = Object.freeze({
   // ── idle / offer ──
   idleStatus: 'Get a transcript from IronMemo.',
@@ -31,14 +34,14 @@ export const S = Object.freeze({
   quote: Object.freeze({
     checking: 'Checking with IronMemo what this recording costs…',
     partial: 'Only part of this recording would be transcribed',
-    partialHint: (cap, n, b) => `IronMemo would transcribe up to the first ${cap}: all of it costs about ${n} credits${b == null ? '' : ` and the account has ${b}`}. Top up first to get all of it, or send it now and unlock the rest later on IronMemo.`,
+    partialHint: (cap, n, b) => `IronMemo would transcribe up to the first ${cap}: all of it costs about ${credits(n)}${b == null ? '' : ` and the account has ${b}`}. Top up first to get all of it, or send it now and unlock the rest later on IronMemo.`,
     wait: 'This recording would wait for payment',
-    waitHint: (n, b) => `It costs about ${n} credits${b == null ? '' : ` and the account has ${b}`}. Sent now, it waits on IronMemo and starts by itself after a top-up — nothing to upload again.`,
+    waitHint: (n, b) => `It costs about ${credits(n)}${b == null ? '' : ` and the account has ${b}`}. Sent now, it waits on IronMemo and starts by itself after a top-up — nothing to upload again.`,
     short: 'Not enough credits for all of this recording',
-    shortHint: (n, b) => `It costs about ${n} credits and the account has ${b}. IronMemo may transcribe only part of it, or keep it waiting until a top-up.`,
+    shortHint: (n, b) => `It costs about ${credits(n)} and the account has ${b}. IronMemo may transcribe only part of it, or keep it waiting until a top-up.`,
     btnSendAnyway: 'Send anyway',
     btnTopUp: 'Top up on IronMemo',
-    sent: (n, b) => `About ${n} credits for this recording${b == null ? '' : ` (the account had ${b})`}.`,
+    sent: (n, b) => `About ${credits(n)} for this recording${b == null ? '' : ` (the account had ${b})`}.`,
   }),
 
   // ── in flight ──

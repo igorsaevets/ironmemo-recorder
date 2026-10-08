@@ -24,7 +24,7 @@
 </head>
 <body>
 <h1>Privacy Policy — IronMemo Audio Recorder</h1>
-<p class="meta">Effective date: 21 September 2026 · Applies to extension v0.6.0 and later · <a href="./">Back to home</a></p>
+<p class="meta">Effective date: 8 October 2026 · Applies to extension v0.6.0 and later · <a href="./">Back to home</a></p>
 
 <p>IronMemo Audio Recorder ("the extension") is a Chrome extension that records microphone and browser tab audio on the user's own device. Starting with v0.6.0, the extension can also send one recording at a time to IronMemo servers for transcription — always <em>after</em> a separate consent dialog and never automatically. This policy explains exactly what data the extension handles, what is optional, and what happens on the server if you choose to use it.</p>
 
@@ -56,6 +56,7 @@
 <ul>
   <li>The audio file of the recording you chose — either the microphone track, the tab-audio track, or the mix, depending on the recording.</li>
   <li>The recording's title (its date and time only), source type (<em>dictaphone</em> for mic-only recordings, or <em>other</em> for tab recordings), duration and size.</li>
+  <li>From version 2.2.0, while you are signed in and have accepted the cloud consent: the Recordings page asks IronMemo for your account's credit balance and remaining free minutes (to show them) and the list of your IronMemo workspaces (to choose where a recording is filed); after you click <em>Transcribe</em> it asks the price of that one recording by sending its duration — before any audio is uploaded.</li>
   <li>Your e-mail address, only when you enter it in the <em>Add your e-mail</em> dialog. IronMemo delivers a one-time code to it and uses it as the login of your account.</li>
   <li>A device identifier generated locally by the extension for guest sessions.</li>
   <li>An <code>X-IronMemo-Client: ironmemo-extension/&lt;version&gt;</code> HTTP header on every request, so IronMemo can distinguish traffic by extension version. No user data is placed in this header.</li>
