@@ -122,6 +122,7 @@ def main():
                     const s = typeof m.defaultSettings === 'function' ? m.defaultSettings() : null;
                     if (!s) return { error: 'no defaultSettings export' };
                     return {
+                        sourceMode: s.source?.mode,
                         engine: s.audioEnc?.impl,
                         codec: s.audioEnc?.codec,
                         container: s.audioEnc?.container,
@@ -129,7 +130,7 @@ def main():
                     };
                 }""")
                 if defaults and not defaults.get("error"):
-                    expected = {"engine": "webcodecs", "codec": "opus", "container": "ogg", "backend": "opfs"}
+                    expected = {"sourceMode": "mic+tab", "engine": "webcodecs", "codec": "opus", "container": "ogg", "backend": "opfs"}
                     schema_ok = all(defaults.get(k) == v for k, v in expected.items())
                     schema_detail = json.dumps(defaults, ensure_ascii=False)
                 else:

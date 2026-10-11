@@ -190,7 +190,7 @@ async function start({ sessionId, streamId, settings, startTimings = null, sourc
   state.lost = {}; state.paused = false; state.mixSources = new Map();
   state.frozen = {}; state.fatal = null; state.stopping = false; state.lastQuotaWarnAt = 0; state.storageEstimate = null;
 
-  const mode = g('source.mode', 'mic');
+  const mode = g('source.mode', 'mic+tab');
   const impl = g('audioEnc.impl', 'mediarecorder');
   state.engine = await pickEngine(impl);
   // I4a: `sourceType` is the IronMemo source_type ENUM (meet|zoom|teams|dictaphone|other)

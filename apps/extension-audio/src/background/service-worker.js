@@ -151,7 +151,7 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
   try {
     const settings = (await chrome.storage.local.get('ironmemo.settings.v1'))['ironmemo.settings.v1'] ?? {};
     mark('settingsLoaded');
-    const mode = settings?.source?.mode ?? 'mic';
+    const mode = settings?.source?.mode ?? 'mic+tab';
     const needsMic = mode === 'mic' || mode === 'mic+tab';
     const needsTab = mode === 'tab' || mode === 'mic+tab';
 

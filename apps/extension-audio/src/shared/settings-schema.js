@@ -61,7 +61,7 @@ export const SETTINGS = [
   {
     key: 'source.mode', group: 'source', type: 'enum', stage: 'mvp',
     label: 'Что записываем',
-    default: 'mic',
+    default: 'mic+tab',
     options: [
       { value: 'mic',     label: 'Только микрофон' },
       { value: 'tab',     label: 'Только звук вкладки' },
