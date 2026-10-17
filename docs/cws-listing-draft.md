@@ -8,6 +8,7 @@ sub-processors).
 
 These go into the CWS console textarea (per locale), NOT into the extension code.
 Title and summary come from `_locales/<lang>/messages.json` and require a zip rebuild.
+Every other Developer Dashboard field (permissions, privacy, version history): `../CHROMEWEBSTORE.md`.
 
 ---
 
