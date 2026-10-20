@@ -19,12 +19,15 @@ Checks:
   5. Session list page renders (container present)
   6. Permission page renders
   7. Settings schema exports expected defaults
+  8. Code fallbacks equal the schema (offscreen g() and the service worker's raw reads), and withDefaults({})
+     — what a fresh install records with — names the schema's engine (P300-25)
 
 Does NOT test recording (needs fake microphone + CDP triggerAction for tabCapture).
 For full crash-matrix testing see tests/crash_matrix.py.
 """
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -38,6 +41,36 @@ from playwright.sync_api import sync_playwright
 
 CHECKS = []
 FAILED = []
+
+# Every place that reads a setting with its own fallback (P300-25: offscreen's fallbacks said MediaRecorder/WebM
+# while the schema said WebCodecs/Ogg, and a fresh install recorded the fallbacks).
+FALLBACK_READS = [
+    ("offscreen/offscreen.js", re.compile(r"\bg\('([\w.]+)',\s*([^)]*?)\)")),
+    ("background/service-worker.js", re.compile(r"getByPath\(settings, '([\w.]+)'\)\s*\?\?\s*([^,;)\n]+)")),
+    ("background/service-worker.js", re.compile(r"settings\?\.(\w+\?\.\w+)\s*\?\?\s*('[^']*')")),
+]
+
+
+def js_literal(t: str):
+    t = t.strip()
+    if len(t) >= 2 and t[0] == t[-1] == "'":
+        return t[1:-1]
+    if t in ("true", "false"):
+        return t == "true"
+    for cast in (int, float):
+        try:
+            return cast(t)
+        except ValueError:
+            pass
+    return f"<expression {t}>"
+
+
+def code_fallbacks(src: Path):
+    out = []
+    for rel, rx in FALLBACK_READS:
+        text = (src / rel).read_text(encoding="utf-8")
+        out += [(rel, m.group(1).replace("?.", "."), js_literal(m.group(2))) for m in rx.finditer(text)]
+    return out
 
 
 def check(name: str, ok: bool, detail: str = ""):
@@ -138,6 +171,25 @@ def main():
             except Exception as e:
                 schema_detail = str(e)[:200]
             check("settings_schema_defaults", schema_ok, schema_detail)
+
+            # 8. No second default in code (P300-25)
+            fb_ok, fb_detail = False, ""
+            try:
+                sch = opts.evaluate("""async () => {
+                    const m = await import('/src/shared/settings-schema.js');
+                    const st = await import('/src/shared/settings-store.js');
+                    const f = typeof st.withDefaults === 'function' ? st.withDefaults({}) : null;
+                    return { defaults: Object.fromEntries(m.SETTINGS.map((s) => [s.key, s.default])),
+                             fresh: f ? [f.audioEnc.impl, f.audioEnc.container, f.storage.segmentStrategy] : null };
+                }""")
+                reads = code_fallbacks(REPO_ROOT / "apps" / "extension-audio" / "src")
+                bad = [f"{rel} {key}: {fb!r} vs schema {sch['defaults'].get(key, 'NOT IN SCHEMA')!r}"
+                       for rel, key, fb in reads if key not in sch["defaults"] or sch["defaults"][key] != fb]
+                fb_ok = not bad and len(reads) >= 40 and sch["fresh"] == ["webcodecs", "ogg", "webcodecs_muxed"]
+                fb_detail = "; ".join(bad[:4]) or f"{len(reads)} reads equal the schema; withDefaults({{}}) -> {sch['fresh']}"
+            except Exception as e:
+                fb_detail = str(e)[:200]
+            check("code_fallbacks_match_schema", fb_ok, fb_detail)
 
             # 6. Manifest version readable
             mf = json.loads((REPO_ROOT / "apps" / "extension-audio" / "manifest.json").read_text(encoding="utf-8"))

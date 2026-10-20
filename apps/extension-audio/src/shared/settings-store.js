@@ -17,7 +17,15 @@ const PROFILES_KEY = 'ironmemo.profiles.v1';
 
 export async function loadSettings() {
   const raw = await chrome.storage.local.get(KEY);
-  const stored = raw[KEY];
+  return withDefaults(raw[KEY]);
+}
+
+/**
+ * The values a recording runs with: schema defaults overlaid by what is stored. Pure, so the offscreen
+ * document (it has no chrome.storage) applies the same rule as every page (P300-25: it read the raw stored
+ * object, and a key never stored took offscreen's own fallback — MediaRecorder/WebM on a fresh install).
+ */
+export function withDefaults(stored) {
   const base = defaultSettings();
   if (!stored) return base;
 
@@ -32,6 +40,11 @@ export async function loadSettings() {
   merged.__schemaVersion = SETTINGS_SCHEMA_VERSION;
   merged.__migratedFrom = stored.__schemaVersion ?? 'unknown';
   return merged;
+}
+
+/** The schema keys `stored` actually holds: what the user chose, as opposed to defaults. */
+export function storedKeys(stored) {
+  return stored ? SETTINGS.filter((s) => getByPath(stored, s.key) !== undefined).map((s) => s.key) : [];
 }
 
 export async function saveSettings(values) {

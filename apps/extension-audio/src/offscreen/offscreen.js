@@ -30,6 +30,7 @@
 
 import { runWebCodecsFeasibility } from '../shared/webcodecs-support.js';
 import { SETTINGS, getByPath } from '../shared/settings-schema.js';
+import { withDefaults, storedKeys } from '../shared/settings-store.js';
 
 const state = {
   sessionId: null,
@@ -104,7 +105,8 @@ const g = (path, fallback) =>
 const nowPair = () => ({ wall: Date.now(), mono: Math.round(performance.now() * 10) / 10 });
 
 async function pickEngine(impl) {
-  if (impl !== 'webcodecs') return 'mediarecorder';
+  // 'auto' («Авто по результату пробы») runs the same probe as 'webcodecs'; it used to mean MediaRecorder always.
+  if (impl !== 'webcodecs' && impl !== 'auto') return 'mediarecorder';
   const say = (info) => { state.engineFallback = info; report('info', { info }); };
   if (typeof AudioEncoder === 'undefined' || typeof MediaStreamTrackProcessor === 'undefined') {
     say('В этом браузере нет WebCodecs — записываем через MediaRecorder+WebM.');
@@ -179,7 +181,11 @@ async function probeWebCodecs({ streamId = null, withMic = true } = {}) {
 async function start({ sessionId, streamId, settings, startTimings = null, sourceType = null }) {
   if (state.sessionId) throw new Error('Запись уже идёт.');
   state.sessionId = sessionId;
-  state.settings = settings;
+  // The service worker hands over the RAW stored object ({} on a fresh install): a key it lacks takes the
+  // schema default here, not a g() fallback (P300-25: a fresh install recorded MediaRecorder/WebM, ADR-004 says
+  // WebCodecs/Ogg). storedSettingKeys tells the report which values were the user's.
+  state.storedSettingKeys = storedKeys(settings);
+  state.settings = withDefaults(settings);
   state.startedAt = performance.now();
   state.timeline = {
     t0Wall: Date.now(), t0Mono: Math.round(state.startedAt * 10) / 10, t0Iso: new Date().toISOString(),
@@ -191,11 +197,17 @@ async function start({ sessionId, streamId, settings, startTimings = null, sourc
   state.frozen = {}; state.fatal = null; state.stopping = false; state.lastQuotaWarnAt = 0; state.storageEstimate = null;
 
   const mode = g('source.mode', 'mic+tab');
-  const impl = g('audioEnc.impl', 'mediarecorder');
+  const impl = g('audioEnc.impl', 'webcodecs');
+  state.engineFallback = null;
   state.engine = await pickEngine(impl);
+  // A WebCodecs or 'auto' request that lands on MediaRecorder records WebM, as pickEngine announces: Chrome's
+  // MediaRecorder cannot write Ogg, and the stored 'ogg' is the WebCodecs muxer's (P300-25: Start threw
+  // «audio/ogg;codecs=opus не поддерживается»). An explicit MediaRecorder choice keeps its own container.
+  state.mrContainer = state.engine === 'mediarecorder' && impl !== 'mediarecorder' ? 'webm' : null;
   // I4a: `sourceType` is the IronMemo source_type ENUM (meet|zoom|teams|dictaphone|other)
   // computed by the service worker from the captured tab; the host is deliberately not stored.
   const applied = { requestedAt: state.timeline.t0Iso, sources: {}, engine: state.engine,
+                    engineFallback: state.engineFallback,
                     sourceType: sourceType ?? (streamId ? 'other' : 'dictaphone') };
 
   // ── микрофон ──
@@ -456,7 +468,9 @@ async function startMediaRecorder(applied, bitrate) {
     requestedBitrate: bitrate, actualBitrate: r.actualBitrate, mimeHonoured: r.actualMime === mime,
     firstSegmentStartWall: r.startWall,
   }));
-  applied.segmentStrategy = g('storage.segmentStrategy', 'continuous');
+  const strategy = g('storage.segmentStrategy', 'webcodecs_muxed');
+  // webcodecs_muxed has no MediaRecorder form: a fallback recording is one continuous WebM per role.
+  applied.segmentStrategy = strategy === 'webcodecs_muxed' ? 'continuous' : strategy;
   // rolling_finalized (I2): every `segmentSeconds` each role's recorder is replaced by a fresh one, so
   // every segment on disk is a complete MediaRecorder output (own EBML header, closed by stop()).
   // Which is NOT the same as "has a duration": Chrome's WebM muxer writes live-mode headers and
@@ -589,7 +603,7 @@ function onMediaWriteFailed(role, err, during) {
 
 function resolveMime() {
   const codec = g('audioEnc.codec', 'opus');
-  const container = g('audioEnc.container', 'webm');
+  const container = state.mrContainer ?? g('audioEnc.container', 'ogg');
   if (codec === 'pcm16') return 'audio/webm;codecs=pcm';
   const codecPart = { opus: 'opus', aac: 'mp4a.40.2' }[codec] ?? 'opus';
   const containerPart = { webm: 'audio/webm', ogg: 'audio/ogg', mp4: 'audio/mp4' }[container] ?? 'audio/webm';
@@ -722,7 +736,7 @@ async function startWebCodecs(applied) {
   if (g('audioEnc.codec', 'opus') !== 'opus') {
     throw new Error('Путь WebCodecs в этой итерации реализован только для Opus. Выберите Opus или MediaRecorder.');
   }
-  if (g('audioEnc.container', 'webm') !== 'ogg') {
+  if (g('audioEnc.container', 'ogg') !== 'ogg') {
     throw new Error('Путь WebCodecs в этой итерации пишет только Ogg. Выберите контейнер Ogg или движок MediaRecorder. '
                   + 'Заглушка намеренная: молчаливая подмена контейнера исказила бы замер.');
   }
@@ -1067,7 +1081,7 @@ function requestedVsApplied(final) {
     'audioEnc.opusUseInbandFEC': { applied: firstEnc?.opus?.useinbandfec ?? null, note: 'из isConfigSupported().config; в файле не проверяется' },
     'video.enabled': { applied: false, note: 'видео в этой итерации не пишется' },
     'storage.backend': { applied: state.engine === 'webcodecs' ? 'opfs' : (state.opfsDir ? 'opfs' : 'memory'), note: a.opfsError ?? null },
-    'storage.segmentStrategy': { applied: state.engine === 'webcodecs' ? 'webcodecs_muxed' : 'continuous', note: 'rolling_finalized — И-2' },
+    'storage.segmentStrategy': { applied: state.engine === 'webcodecs' ? 'webcodecs_muxed' : (a.segmentStrategy ?? 'continuous'), note: 'rolling_finalized — И-2' },
     'storage.timesliceMs': { applied: state.engine === 'mediarecorder' && final ? meanInterval(state.recorders[0]?.chunkIntervalsMs) : null, note: state.engine === 'mediarecorder' ? 'измеренный средний интервал ondataavailable' : 'не применимо к WebCodecs' },
     // Median, not mean: a device-loss pause produces one page interval as long as the gap
     // (measured: one 10 000 ms interval in the `devices` run skewed the mean to 1094 ms).
@@ -1099,6 +1113,7 @@ function compareApplied(key, req, applied) {
     return applied.match === 'deviceId' || applied.match === 'label' || applied.match === 'groupId';
   }
   if (key === 'source.mode') return true; // descriptive
+  if (key === 'audioEnc.impl' && req === 'auto') return applied === 'webcodecs' || applied === 'mediarecorder';
   if (typeof req === 'number' && typeof applied === 'number') return Math.abs(req - applied) <= Math.max(1, req * 0.02);
   if (typeof req === 'object' && req) return JSON.stringify(req) === JSON.stringify(applied);
   return req === applied;
@@ -1129,6 +1144,7 @@ function buildCaptureReport(final) {
     events: state.events,
     memory: state.memSamples,
     settings: state.settings,
+    storedSettingKeys: state.storedSettingKeys ?? [],
   };
 }
 
