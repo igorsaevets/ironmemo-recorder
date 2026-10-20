@@ -1082,14 +1082,14 @@ async function downloadFile(sid, name, roleKey, ext, session) {
 /**
  * MediaRecorder WebM has no Duration and no Cues, so desktop players cannot seek in it
  * (P300-23, the owner's 1 h Meet recording in MPC-HC). The fix rewrites the header only;
- * if it fails for any reason the user still gets the original bytes.
+ * a file it does not fully understand, or any error, gives the user the original bytes.
  */
 async function seekableOrOriginal(blob) {
   try {
     const t0 = performance.now();
     const r = await makeWebmSeekable(blob);
     console.log(`[P300-23] seekable webm: changed=${r.changed} ${r.reason ?? ''} clusters=${r.clusters ?? '-'} `
-                + `duration=${r.durationMs ?? '-'} ms in ${(performance.now() - t0).toFixed(0)} ms`);
+                + `duration=${r.durationMs ?? '-'} ms dropped=${r.droppedTailBytes ?? 0} B in ${(performance.now() - t0).toFixed(0)} ms`);
     return r.blob;
   } catch (e) {
     console.warn('[P300-23] seekable webm failed, downloading the original:', e);
@@ -1143,6 +1143,11 @@ async function startPlayback(sid, roleKey, fileName, sessionEl) {
   }
   if (mySeq !== playSeq) return;
   if (file.size === 0) { showStatus(S.playerError('file is empty'), 'error'); return; }
+  // P300-23b: a MediaRecorder WebM has no Duration, so the seek bar stayed disabled (duration Infinity).
+  if (fileName.endsWith('.webm')) {
+    file = await seekableOrOriginal(file);
+    if (mySeq !== playSeq) return;
+  }
 
   const blobUrl = URL.createObjectURL(file);
   if (mySeq !== playSeq) { URL.revokeObjectURL(blobUrl); return; }

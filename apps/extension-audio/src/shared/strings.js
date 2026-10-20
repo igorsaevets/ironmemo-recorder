@@ -351,17 +351,21 @@ export const POPUP = Object.freeze({
   meterMix: 'Mix',
   meterWaiting: 'Waiting for audio…',
   meterPaused: 'Paused',
-  // P300-23: a mic-only recording of a call has no other participants (echo cancellation removes
-  // what the speakers play), measured on the owner's 1 h Meet recording of 2026-10-18.
+  // P300-23: mic-only never captures the tab, so the other people on a call are not recorded (the
+  // owner's 1 h Meet recording of 2026-10-18). Through speakers, Chrome's echo cancellation can also
+  // remove what Chrome plays from the mic signal, so not even an echo of them is left.
   micOnlyWarn: 'Microphone only: other people on a call will not be in the recording.',
+  micOnlyWarnActive: 'This recording is microphone only: other people on the call are not in it. Stop it to switch.',
   micOnlyFix: 'Record tab audio too',
 });
 
 /** P300-23: version and install source, so a test build is never mistaken for the store one. */
 export const BUILD = Object.freeze({
-  line: (version, installType) => `IronMemo v${version} · ${({
-    normal: 'Chrome Web Store', development: 'unpacked test build', sideload: 'sideloaded', admin: 'installed by admin',
-  })[installType] ?? (installType ?? 'install source unknown')}`,
+  // 'normal' is any .crx install; only the store's own package carries the store item id (P300-23b).
+  line: (version, installType, storeId) => `IronMemo v${version} · ${installType === 'normal'
+    ? (storeId ? 'Chrome Web Store' : 'installed package')
+    : ({ development: 'unpacked test build', sideload: 'installed by other software', admin: 'installed by admin',
+         other: 'other install source' })[installType] ?? 'install source unknown'}`,
   devHint: 'Loaded unpacked from a folder. It does not update from the Chrome Web Store, and its recordings are stored separately from the store version.',
 });
 

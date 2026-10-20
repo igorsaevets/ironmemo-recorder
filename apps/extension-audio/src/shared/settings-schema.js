@@ -63,7 +63,8 @@ export const SETTINGS = [
     label: 'Что записываем',
     default: 'mic+tab',
     options: [
-      { value: 'mic',     label: 'Только микрофон' },
+      { value: 'mic',     label: 'Только микрофон',
+        risk: 'Other people on a call are not recorded: the tab is not captured (P300-23).' },
       { value: 'tab',     label: 'Только звук вкладки' },
       { value: 'mic+tab', label: 'Микрофон + вкладка', hint: 'основной режим для встреч' },
     ],

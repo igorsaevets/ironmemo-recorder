@@ -41,6 +41,18 @@ export async function saveSettings(values) {
   return values;
 }
 
+/**
+ * Store only `patch` (dotted keys) over what is stored now (P300-23b). Saving the whole merged
+ * object pins every default of the day: a stored 'mic' outlived the mic+tab default (a40cb02)
+ * for anyone who had only picked a microphone in the popup.
+ */
+export async function saveSettingsPatch(patch) {
+  const stored = structuredClone((await chrome.storage.local.get(KEY))[KEY] ?? {});
+  for (const [k, v] of Object.entries(patch)) setByPath(stored, k, v);
+  await saveSettings(stored);
+  return loadSettings();
+}
+
 export async function resetSettings() {
   const d = defaultSettings();
   await chrome.storage.local.set({ [KEY]: d });

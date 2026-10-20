@@ -1,5 +1,5 @@
-import { loadSettings, saveSettings } from '../shared/settings-store.js';
-import { getByPath, setByPath, estimateMBPerHour } from '../shared/settings-schema.js';
+import { loadSettings, saveSettingsPatch } from '../shared/settings-store.js';
+import { getByPath, estimateMBPerHour } from '../shared/settings-schema.js';
 import { POPUP } from '../shared/strings.js';
 import { listAudioDevices, resolveDevice, DEVICE_CLASS } from '../shared/audio-devices.js';
 import { renderBuildLine } from '../shared/build-info.js';
@@ -162,18 +162,23 @@ async function renderConfig() {
 async function renderModeWarn(v) {
   const box = $('modeWarn');
   if (getByPath(v, 'source.mode') !== 'mic') { box.hidden = true; return; }
-  $('modeWarnText').textContent = POPUP.micOnlyWarn;
   const fix = $('modeFix');
   fix.textContent = POPUP.micOnlyFix;
-  fix.disabled = await isRecordingActive();
   fix.onclick = async () => {
+    // P300-23b: the switch is for the next recording, and one may have started since the popup opened
+    if (await isRecordingActive()) { setModeWarnActive(true); return; }
     fix.disabled = true;
-    const fresh = await loadSettings();
-    setByPath(fresh, 'source.mode', 'mic+tab');
-    await saveSettings(fresh);
+    await saveSettingsPatch({ 'source.mode': 'mic+tab' });
     await renderConfig();
   };
   box.hidden = false;
+  setModeWarnActive(await isRecordingActive());
+}
+
+/** While a recording runs, the warning is about that recording and the switch waits for the next one. */
+function setModeWarnActive(active) {
+  $('modeWarnText').textContent = active ? POPUP.micOnlyWarnActive : POPUP.micOnlyWarn;
+  $('modeFix').disabled = active;
 }
 
 async function renderMicPicker(v) {
@@ -252,10 +257,7 @@ async function renderMicPicker(v) {
     const chosen = devices.inputs.find((d) => d.deviceId === sel.value);
     const newVal = (!chosen || sel.value === 'default') ? 'default'
       : { deviceId: chosen.deviceId, label: chosen.label, groupId: chosen.groupId };
-    const fresh = await loadSettings();
-    setByPath(fresh, 'source.micDeviceId', newVal);
-    await saveSettings(fresh);
-    settingsValues = fresh;
+    settingsValues = await saveSettingsPatch({ 'source.micDeviceId': newVal });
     const resolvedNew = resolveDevice(newVal, devices.inputs);
     updateMicWarn(resolvedNew.device);
   };
@@ -319,6 +321,7 @@ async function refresh() {
   if (micSel) {
     micSel.disabled = rec || paused || awaitingPerm;
   }
+  if (!$('modeWarn').hidden) setModeWarnActive(rec || paused || awaitingPerm || s.status === 'starting');
 
   if (rec || paused) startLevelMeter(); else stopLevelMeter();
 
