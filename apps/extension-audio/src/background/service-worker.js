@@ -155,6 +155,13 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
     const needsMic = mode === 'mic' || mode === 'mic+tab';
     const needsTab = mode === 'tab' || mode === 'mic+tab';
 
+    // P300-24: the tab to capture is the one that is active when Start arrives — the tab the user opened the popup
+    // on. It is resolved BEFORE the microphone step: on a new install that step opens the permission page as the
+    // active tab, and the page is still active when the grant comes back (it closes itself 2.5 s later).
+    const targetTab = !needsTab ? null : tabId
+      ? await chrome.tabs.get(tabId)
+      : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+
     // ── 1. Разрешение микрофона, если нужно ──
     //
     // Не пытаемся дать offscreen шанс попросить самому: он невидим, и Chrome
@@ -186,9 +193,7 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
     // (ADR-008 «Уточнения» 7: storing it would be extra data to disclose). Mic-only = dictaphone.
     let sourceType = 'dictaphone';
     if (needsTab) {
-      const tab = tabId
-        ? await chrome.tabs.get(tabId)
-        : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+      const tab = targetTab;
       if (!tab) throw new Error('Не найдена активная вкладка для захвата звука.');
       if (/^(chrome|edge|about|chrome-extension):/i.test(tab.url ?? '')) {
         throw new Error('Звук служебных страниц браузера захватить нельзя. Откройте обычный сайт.');
