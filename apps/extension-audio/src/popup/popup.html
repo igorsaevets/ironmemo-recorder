@@ -41,6 +41,12 @@
 
   <div class="config" id="config"></div>
 
+  <!-- P300-23: mic-only records nobody else on a call; one click switches to microphone + tab. -->
+  <div class="mode-warn" id="modeWarn" hidden>
+    <div id="modeWarnText"></div>
+    <button id="modeFix" class="btn tiny"></button>
+  </div>
+
   <!-- One-time notice for people who accepted the recording notice before transcription existed:
        no consent bump (that would force cloud consent on local-only users, ADR-008 «Уточнения» 5). -->
   <div class="notice" id="notice" hidden>
@@ -77,6 +83,8 @@
     <a href="#" id="openLab">Diagnostics</a>
   </div>
   </div>
+  <!-- P300-23: outside #app, so the consent screen shows which build this is too. -->
+  <div class="build" id="buildLine"></div>
 
   <script type="module" src="popup.js"></script>
 </body>

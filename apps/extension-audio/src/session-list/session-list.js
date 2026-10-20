@@ -23,6 +23,8 @@ import { S, reasonText } from '../shared/strings.js';
 import { isPlausibleEmail } from '../ingest/claim.js';
 import { buildDiagnostics } from '../ingest/diag.js';
 import { demuxOggOpus, opusPacketSamples, OggOpusMuxer } from '../shared/ogg-opus.js';
+import { makeWebmSeekable } from '../shared/webm-seekable.js';
+import { renderBuildLine } from '../shared/build-info.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -66,6 +68,7 @@ const quoteAsk = new Map();        // P300-3: sid → the server's price that th
 const quoting = new Set();         // P300-3: sids whose price is being read right now
 const IN_FLIGHT = new Set(['session', 'creating', 'uploading', 'finalizing', 'processing']);
 
+renderBuildLine($('buildLine')).catch(() => {});
 boot().catch((e) => showStatus(`Failed to load the list: ${e?.message ?? e}`, 'error'));
 
 async function boot() {
@@ -1071,8 +1074,27 @@ async function downloadFile(sid, name, roleKey, ext, session) {
     const sessionsDir = await root.getDirectoryHandle('sessions');
     const dh = await sessionsDir.getDirectoryHandle(sid);
     const fh = await dh.getFileHandle(name);
-    return fh.getFile();
+    const file = await fh.getFile();
+    return ext === 'webm' ? seekableOrOriginal(file) : file;
   }, filename, ext);
+}
+
+/**
+ * MediaRecorder WebM has no Duration and no Cues, so desktop players cannot seek in it
+ * (P300-23, the owner's 1 h Meet recording in MPC-HC). The fix rewrites the header only;
+ * if it fails for any reason the user still gets the original bytes.
+ */
+async function seekableOrOriginal(blob) {
+  try {
+    const t0 = performance.now();
+    const r = await makeWebmSeekable(blob);
+    console.log(`[P300-23] seekable webm: changed=${r.changed} ${r.reason ?? ''} clusters=${r.clusters ?? '-'} `
+                + `duration=${r.durationMs ?? '-'} ms in ${(performance.now() - t0).toFixed(0)} ms`);
+    return r.blob;
+  } catch (e) {
+    console.warn('[P300-23] seekable webm failed, downloading the original:', e);
+    return blob;
+  }
 }
 
 async function downloadParts(sid, roleKey, segment, parts, session) {
@@ -1094,7 +1116,7 @@ async function downloadParts(sid, roleKey, segment, parts, session) {
       const f = await fh.getFile();
       blobs.push(f);
     }
-    return new Blob(blobs, { type: 'audio/webm' });
+    return seekableOrOriginal(new Blob(blobs, { type: 'audio/webm' }));
   }, filename, 'webm');
 }
 

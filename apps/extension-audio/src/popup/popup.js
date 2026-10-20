@@ -2,6 +2,7 @@ import { loadSettings, saveSettings } from '../shared/settings-store.js';
 import { getByPath, setByPath, estimateMBPerHour } from '../shared/settings-schema.js';
 import { POPUP } from '../shared/strings.js';
 import { listAudioDevices, resolveDevice, DEVICE_CLASS } from '../shared/audio-devices.js';
+import { renderBuildLine } from '../shared/build-info.js';
 
 const $ = (id) => document.getElementById(id);
 let timerHandle = null;
@@ -28,6 +29,7 @@ let micDebounce = null;
 boot().catch((e) => console.error('[popup] boot failed', e));
 
 async function boot() {
+  renderBuildLine($('buildLine')).catch(() => {});
   const consent = await getConsent();
   if (!consent || consent.version !== CONSENT_VERSION) {
     showConsent();
@@ -148,7 +150,30 @@ async function renderConfig() {
     + `<b>${getByPath(v, 'audioEnc.bitrateKbps')} kbps</b></div>` +
     `<div>Est. size: <b>${estimateMBPerHour(v)} MB/h</b></div>`;
 
+  await renderModeWarn(v);
   await renderMicPicker(v);
+}
+
+/**
+ * P300-23: mic-only is what a fresh install of ≤2.2.0 records, and it survives the default
+ * change for anyone whose settings were ever saved (the mic picker saves them all). A call
+ * recorded that way has nobody else in it, so say so before Start and offer the switch.
+ */
+async function renderModeWarn(v) {
+  const box = $('modeWarn');
+  if (getByPath(v, 'source.mode') !== 'mic') { box.hidden = true; return; }
+  $('modeWarnText').textContent = POPUP.micOnlyWarn;
+  const fix = $('modeFix');
+  fix.textContent = POPUP.micOnlyFix;
+  fix.disabled = await isRecordingActive();
+  fix.onclick = async () => {
+    fix.disabled = true;
+    const fresh = await loadSettings();
+    setByPath(fresh, 'source.mode', 'mic+tab');
+    await saveSettings(fresh);
+    await renderConfig();
+  };
+  box.hidden = false;
 }
 
 async function renderMicPicker(v) {
