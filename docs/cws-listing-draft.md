@@ -1,5 +1,8 @@
-# CWS Listing Description — v2.2.0 draft
+# CWS Listing Description — v2.2.1 draft
 
+v2.2.1 (2026-10-20, P300-24): the «New in» line names what 2.2.1 changes for users — a new install records the
+microphone and the tab together, and the popup warns when only the microphone is recorded; the 2.2.0 items stay
+in the same paragraph.
 v2.2.0 (2026-10-08, P300-17): the cloud section describes what 2.1.1–2.1.5 added — the account line (credits +
 free minutes), the price before an upload, «waiting for payment», accounts with several workspaces. «No time limit»
 became «no artificial time limit; the real limit is free disk space» (CLAUDE.md, claims about unlimited).
@@ -40,7 +43,7 @@ Click Transcribe on any recording to send it to IronMemo for a text transcript a
 • The local recording stays on your device — the upload is a copy, not a move
 • You can delete the server copy at any time from the Recordings page
 
-🆕 New in 2.2.0: credits and free minutes on the Recordings page, the price before an upload, a clear "waiting for payment" state, and accounts with several workspaces.
+🆕 New in 2.2.1: a new install records your microphone and the tab together (before, only the microphone), and the popup warns you when only your microphone is being recorded. New in 2.2.0: credits and free minutes on the Recordings page, the price before an upload, a clear "waiting for payment" state, and accounts with several workspaces.
 
 ⛔ What it does NOT do
 
@@ -92,7 +95,7 @@ Source code (MIT): https://github.com/igorsaevets/ironmemo-recorder
 • Локальная запись остаётся на устройстве — загружается копия, не оригинал
 • Серверную копию можно удалить в любой момент со страницы «Записи»
 
-🆕 Новое в 2.2.0: кредиты и бесплатные минуты на странице «Записи», цена до загрузки, понятный статус «ждёт оплаты» и аккаунты с несколькими рабочими пространствами.
+🆕 Новое в 2.2.1: после установки записываются сразу микрофон и звук вкладки (раньше — только микрофон), а окно расширения предупреждает, когда записывается только ваш микрофон. Новое в 2.2.0: кредиты и бесплатные минуты на странице «Записи», цена до загрузки, понятный статус «ждёт оплаты» и аккаунты с несколькими рабочими пространствами.
 
 ⛔ Чего НЕ делает
 
@@ -115,6 +118,16 @@ Source code (MIT): https://github.com/igorsaevets/ironmemo-recorder
 ```
 
 ---
+
+## Changes from v2.2.0 listing (v2.2.1)
+
+1. **«New in» line** (EN + RU): what 2.2.1 changes for users, each part runtime-tested in CfT 152 on 2026-10-20:
+   a profile with no saved settings records `local_mic` + `remote_tab` + `compatibility_mix`
+   (`.claude/scripts/test_p300_25.py`, case `fresh`; default `a40cb02`); a stored «Microphone only» shows
+   «Microphone only: other people on a call will not be in the recording.» before Start, with a one-click switch
+   (`.claude/scripts/test_p300_23.py`; `5105d66`). The 2.2.0 items stay, marked «New in 2.2.0».
+2. **Not claimed**: seekable downloads (`5105d66` concerns WebM files, which a default recording no longer
+   produces after `5967268`), the version line in the popup, the recording engine.
 
 ## Changes from v2.1.0 listing (v2.2.0)
 
