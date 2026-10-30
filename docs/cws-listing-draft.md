@@ -1,5 +1,8 @@
-# CWS Listing Description — v2.2.1 draft
+# CWS Listing Description — v2.2.2 draft
 
+v2.2.2 (2026-10-30): the «New in» line adds the one user-visible change in 2.2.2 — a link in the popup and the
+Recordings page that opens the service's own transcription landing (ironmemo.com/transcribe). The 2.2.1 and 2.2.0
+items stay in the same paragraph.
 v2.2.1 (2026-10-20, P300-24): the «New in» line names what 2.2.1 changes for users — a new install records the
 microphone and the tab together, and the popup warns when only the microphone is recorded; the 2.2.0 items stay
 in the same paragraph.
@@ -43,7 +46,7 @@ Click Transcribe on any recording to send it to IronMemo for a text transcript a
 • The local recording stays on your device — the upload is a copy, not a move
 • You can delete the server copy at any time from the Recordings page
 
-🆕 New in 2.2.1: a new install records your microphone and the tab together (before, only the microphone), and the popup warns you when only your microphone is being recorded. New in 2.2.0: credits and free minutes on the Recordings page, the price before an upload, a clear "waiting for payment" state, and accounts with several workspaces.
+🆕 New in 2.2.2: a link to transcribe your recordings on ironmemo.com — in the popup and the Recordings page. New in 2.2.1: a new install records your microphone and the tab together (before, only the microphone), and the popup warns you when only your microphone is being recorded. New in 2.2.0: credits and free minutes on the Recordings page, the price before an upload, a clear "waiting for payment" state, and accounts with several workspaces.
 
 ⛔ What it does NOT do
 
@@ -95,7 +98,7 @@ Source code (MIT): https://github.com/igorsaevets/ironmemo-recorder
 • Локальная запись остаётся на устройстве — загружается копия, не оригинал
 • Серверную копию можно удалить в любой момент со страницы «Записи»
 
-🆕 Новое в 2.2.1: после установки записываются сразу микрофон и звук вкладки (раньше — только микрофон), а окно расширения предупреждает, когда записывается только ваш микрофон. Новое в 2.2.0: кредиты и бесплатные минуты на странице «Записи», цена до загрузки, понятный статус «ждёт оплаты» и аккаунты с несколькими рабочими пространствами.
+🆕 Новое в 2.2.2: ссылка на расшифровку записей на ironmemo.com — в окне расширения и на странице «Записи». Новое в 2.2.1: после установки записываются сразу микрофон и звук вкладки (раньше — только микрофон), а окно расширения предупреждает, когда записывается только ваш микрофон. Новое в 2.2.0: кредиты и бесплатные минуты на странице «Записи», цена до загрузки, понятный статус «ждёт оплаты» и аккаунты с несколькими рабочими пространствами.
 
 ⛔ Чего НЕ делает
 
@@ -118,6 +121,13 @@ Source code (MIT): https://github.com/igorsaevets/ironmemo-recorder
 ```
 
 ---
+
+## Changes from v2.2.1 listing (v2.2.2)
+
+1. **«New in» line** (EN + RU): one short sentence about the new link in the popup and Recordings page to
+   `ironmemo.com/transcribe` (UTM query for traffic analytics only, no user data). The 2.2.1 and 2.2.0 items stay.
+2. **Not claimed**: the hidden-for-store `v2.2.2 · Chrome Web Store` build line (silent UI polish, no user action).
+3. **No new permissions**: install warning for 2.2.2 is identical to 2.2.1 — one line, `tabCapture`.
 
 ## Changes from v2.2.0 listing (v2.2.1)
 

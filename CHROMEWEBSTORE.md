@@ -1,6 +1,6 @@
 # Chrome Web Store record — IronMemo
 
-> Last Updated: 2026-10-20 · item `epnajjfddhbhgabhmcaomfnjhnhjnchd` · publisher «Ironmemo»
+> Last Updated: 2026-10-30 · item `epnajjfddhbhgabhmcaomfnjhnhjnchd` · publisher «Ironmemo»
 
 This is the file Google's `chrome-extensions` agent skill (GoogleChrome/modern-web-guidance) keeps
 for an extension: what the Developer Dashboard asks for, and where each value comes from. One home
@@ -83,7 +83,8 @@ On 2026-10-17 it answered HTTP 200, contained the Limited Use statement, and sho
 
 | Version | Submitted | Status | Summary |
 |---|---|---|---|
-| 2.2.1 | draft uploaded 2026-10-20; the owner submits | Draft. The draft CRX matched the tested zip, 48 of 48 files byte-equal | A new install records microphone + tab; its first Start no longer fails after the microphone permission page; a profile with no saved settings records WebCodecs/Ogg; the popup shows the version and warns on «Microphone only»; WebM downloads seek. Production run 21/21 with an Ogg upload |
+| 2.2.2 | draft prepared 2026-10-30; the owner submits | Draft. The build zip is `builds/ironmemo-recorder-v2.2.2.zip` (identical permissions as 2.2.1, same install warning line) | A link in the popup footer and the Recordings header to `ironmemo.com/transcribe` (UTM-tagged for traffic analytics only, no user data); the small «Chrome Web Store» build line is hidden for a normal store install (it stays visible with the orange highlight for unpacked / sideload / admin builds, which is the only case where the diagnostic is useful) |
+| 2.2.1 | 2026-10-20 (Igor submitted); 2026-10-21 (approved; «Updated October 21, 2026») | Published. The public CRX (via `clients2.google.com/service/update2/crx`, 241 435 B, SHA-256 `2391cb4566309773a32e50478e50a79da85efab6d8115dcd5073dfdab027b1cd`) matches `builds/ironmemo-recorder-v2.2.1.zip`, 48 of 48 files byte-equal; the store adds only `_metadata/verified_contents.json` and `update_url` in the manifest (`runs/p300-24b/`). Igor's own Chrome has auto-updated to 2.2.1 (store install, no saved settings → records mic + tab by default) | A new install records microphone + tab; its first Start no longer fails after the microphone permission page; a profile with no saved settings records WebCodecs/Ogg; the popup shows the version and warns on «Microphone only»; WebM downloads seek. Production run 21/21 with an Ogg upload |
 | 2.2.0 | 2026-10-08 | Published. The listing says «Updated October 8, 2026»; seen live 2026-10-11; 57 users on 2026-10-17 | The account line, the price before an upload, «waiting for payment», accounts with several workspaces. The store's draft CRX matched the tested zip, 46 of 46 files byte-equal, and so did the published CRX on 2026-10-20 |
 | 2.1.0 | 2026-09-28 | Published the same day; superseded | Player, trim, rename, markers, mic picker, level meter |
 | 0.6.0 | 2026-09-13 | Published 2026-09-14; superseded | Opt-in cloud transcription, e-mail claim, cloud consent |
