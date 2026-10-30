@@ -24,7 +24,7 @@ import { isPlausibleEmail } from '../ingest/claim.js';
 import { buildDiagnostics } from '../ingest/diag.js';
 import { demuxOggOpus, opusPacketSamples, OggOpusMuxer } from '../shared/ogg-opus.js';
 import { makeWebmSeekable } from '../shared/webm-seekable.js';
-import { renderBuildLine } from '../shared/build-info.js';
+import { renderBuildLine, renderPromo } from '../shared/build-info.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -69,6 +69,7 @@ const quoting = new Set();         // P300-3: sids whose price is being read rig
 const IN_FLIGHT = new Set(['session', 'creating', 'uploading', 'finalizing', 'processing']);
 
 renderBuildLine($('buildLine')).catch(() => {});
+renderPromo($('promoLink'));
 boot().catch((e) => showStatus(`Failed to load the list: ${e?.message ?? e}`, 'error'));
 
 async function boot() {

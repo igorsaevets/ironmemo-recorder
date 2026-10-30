@@ -369,6 +369,15 @@ export const BUILD = Object.freeze({
   devHint: 'Loaded unpacked from a folder. It does not update from the Chrome Web Store, and its recordings are stored separately from the store version.',
 });
 
+// A native link from the extension to the service's own transcription landing. The host is the brand,
+// so this is not third-party advertising, which the Chrome Web Store does not permit inside an extension.
+// UTM lets the service measure how much traffic the extension sends; no user data.
+export const PROMO = Object.freeze({
+  text: 'Transcribe recordings',
+  host: 'ironmemo.com',
+  url: 'https://ironmemo.com/transcribe?utm_source=extension&utm_medium=popup&utm_campaign=popup-promo',
+});
+
 /** Reason → sentence, with a readable fallback for reasons the map does not know. */
 export function reasonText(reasonOrError) {
   const r = typeof reasonOrError === 'string' ? reasonOrError : (reasonOrError?.reason ?? reasonOrError?.kind ?? null);

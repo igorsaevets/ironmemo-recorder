@@ -9,7 +9,7 @@
  * install warning.
  */
 
-import { BUILD } from './strings.js';
+import { BUILD, PROMO } from './strings.js';
 
 const STORE_ID = 'epnajjfddhbhgabhmcaomfnjhnhjnchd'; // the Chrome Web Store item
 
@@ -21,12 +21,31 @@ export async function buildInfo() {
   return { version, installType, storeId, dev: installType === 'development', text: BUILD.line(version, installType, storeId) };
 }
 
-/** Fill an element with the build line; an unpacked build gets the `dev` class. */
+/** Fill an element with the build line; an unpacked build gets the `dev` class. A clean store install
+ * (installType 'normal' AND the store item id) is the obvious case — the line is hidden so the popup
+ * footer stays quiet. The data still goes into capture-report.json for post-hoc diagnostics. */
 export async function renderBuildLine(el) {
   if (!el) return null;
   const b = await buildInfo();
+  if (b.installType === 'normal' && b.storeId) {
+    el.hidden = true;
+    el.textContent = '';
+    el.classList.remove('dev');
+    el.removeAttribute('title');
+    return b;
+  }
+  el.hidden = false;
   el.textContent = b.text;
   el.classList.toggle('dev', b.dev);
   el.title = b.dev ? BUILD.devHint : '';
   return b;
+}
+
+/** Fill an <a> with the promo text and href. Native link to the service's own transcription landing. */
+export function renderPromo(el) {
+  if (!el) return;
+  el.textContent = `${PROMO.text} — ${PROMO.host}`;
+  el.href = PROMO.url;
+  el.target = '_blank';
+  el.rel = 'noopener noreferrer';
 }

@@ -2,7 +2,7 @@ import { loadSettings, saveSettingsPatch } from '../shared/settings-store.js';
 import { getByPath, estimateMBPerHour } from '../shared/settings-schema.js';
 import { POPUP } from '../shared/strings.js';
 import { listAudioDevices, resolveDevice, DEVICE_CLASS } from '../shared/audio-devices.js';
-import { renderBuildLine } from '../shared/build-info.js';
+import { renderBuildLine, renderPromo } from '../shared/build-info.js';
 
 const $ = (id) => document.getElementById(id);
 let timerHandle = null;
@@ -30,6 +30,7 @@ boot().catch((e) => console.error('[popup] boot failed', e));
 
 async function boot() {
   renderBuildLine($('buildLine')).catch(() => {});
+  renderPromo($('promoLink'));
   const consent = await getConsent();
   if (!consent || consent.version !== CONSENT_VERSION) {
     showConsent();
