@@ -1,6 +1,6 @@
 # Chrome Web Store record — IronMemo
 
-> Last Updated: 2026-10-30 · item `epnajjfddhbhgabhmcaomfnjhnhjnchd` · publisher «Ironmemo»
+> Last Updated: 2026-11-06 · item `epnajjfddhbhgabhmcaomfnjhnhjnchd` · publisher «Ironmemo»
 
 This is the file Google's `chrome-extensions` agent skill (GoogleChrome/modern-web-guidance) keeps
 for an extension: what the Developer Dashboard asks for, and where each value comes from. One home
@@ -78,6 +78,21 @@ On 2026-10-17 it answered HTTP 200, contained the Limited Use statement, and sho
 - Publisher: Ironmemo. The contact e-mail and address are kept in the dashboard and not copied here.
 - Support: https://github.com/igorsaevets/ironmemo-recorder/issues
 - Homepage (`homepage_url`): https://igorsaevets.github.io/ironmemo-recorder/
+
+## Unreleased changes — 2026-11-06
+
+- P300-23c (source-label subtask): Recordings shows **Microphone only** with
+  **No tab audio track in this recording.** when the saved source evidence supports
+  it. A microphone-only mix is supported; ambiguous mixes, contradictory tab
+  evidence and active/paused captures are left unclassified. Rename/reopen retains
+  the label. The mix asset is called **Mix**, since it can contain one source.
+- Measured with offline metadata/filename fixtures in CfT 152: 25/25 checks,
+  including legacy `.part` and recovered files. This is UI/source classification,
+  not an audio-audibility test. Test: `tests/test_p300_23c_sources.py`.
+- Manifest stays 2.2.2. This change is **not in the previously submitted ZIP**;
+  it requires a future release. No permissions, privacy/data flow or cloud API
+  changes. Refresh the Recordings screenshot for that release. Dashboard and
+  current public-build status were not rechecked in this iteration.
 
 ## Version history
 

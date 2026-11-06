@@ -41,7 +41,7 @@ const ROLES = ['compatibility_mix', 'local_mic', 'remote_tab']; // longest-first
 const ROLE_LABEL = {
   local_mic: 'Microphone',
   remote_tab: 'Tab',
-  compatibility_mix: 'Mix (mic+tab)',
+  compatibility_mix: S.mixRoleLabel,
 };
 
 // Latin slug in downloaded filenames. Cyrillic in Windows Downloads
@@ -291,6 +291,30 @@ function render(sessions) {
   applyFilter($('searchInput').value);
 }
 
+// P300-23c: describe this recording, never the user's current source setting.
+function renderSourceHint(s) {
+  if (s.status === 'recording' || s.status === 'paused') return '';
+  const filesFor = (role) => ['ready', 'recovered', 'parts'].flatMap((kind) => s.groups[role]?.[kind] ?? []);
+  const hasData = (role) => filesFor(role).some((f) => f.size > 0);
+  const applied = s.report?.appliedReport;
+  const roles = [
+    ...Object.keys(s.report?.roles ?? {}),
+    ...(Array.isArray(applied?.roles) ? applied.roles : []),
+    ...ROLES.filter((r) => filesFor(r).length > 0),
+  ];
+  // A missing tab FILE does not negate tab capture reported by another source of evidence.
+  // Unknown future roles are ambiguous too, rather than proof of microphone-only capture.
+  if (roles.some((r) => r !== 'local_mic' && r !== 'compatibility_mix')) return '';
+  const sources = Object.keys(applied?.sources ?? {});
+  if (sources.some((r) => r !== 'local_mic')) return '';
+  const micSourceKnown = sources.includes('local_mic');
+  // Mic-only capture can also produce a mix, even when separate tracks are disabled.
+  // Without applied source metadata, the contents of a mix remain unknown.
+  if (roles.includes('compatibility_mix') && !micSourceKnown) return '';
+  if (!hasData('local_mic') && !(micSourceKnown && hasData('compatibility_mix'))) return '';
+  return `<div class="session-source-hint"><span class="pill orphan">${escapeHtml(S.badgeMicrophoneOnly)}</span> ${escapeHtml(S.microphoneOnlyHint)}</div>`;
+}
+
 function renderSession(s) {
   const el = document.createElement('div');
   el.className = 'session';
@@ -320,6 +344,7 @@ function renderSession(s) {
         </div>
         ${hasName ? `<div class="session-date secondary">${dateStr}</div>` : ''}
         <div class="session-meta">Duration: ${duration} · On disk: ${formatBytes(s.bytes)}</div>
+        ${renderSourceHint(s)}
       </div>
       <div class="session-id">${s.sid.slice(0, 8)}…</div>
     </div>
@@ -1774,6 +1799,7 @@ function rebuildSessionHead(s, sessionEl) {
     </div>
     ${hasName ? `<div class="session-date secondary">${dateStr}</div>` : ''}
     <div class="session-meta">Duration: ${duration} · On disk: ${formatBytes(s.bytes)}</div>
+    ${renderSourceHint(s)}
   `;
 }
 

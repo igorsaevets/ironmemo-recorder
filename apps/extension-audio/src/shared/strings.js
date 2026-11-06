@@ -286,6 +286,9 @@ export const S = Object.freeze({
   confirmDeleteLocal: (date) => `Delete session from ${date}? Audio and transcript files in this browser cannot be recovered (the server copy, if any, stays on IronMemo).`,
   badgeRecording: 'Recording now',
   badgePaused: 'Paused',
+  badgeMicrophoneOnly: 'Microphone only',
+  microphoneOnlyHint: 'No tab audio track in this recording.',
+  mixRoleLabel: 'Mix',
   deleteBlockedActive: 'Cannot delete — this recording is still in progress. Stop the recording first.',
   transcribeBlockedActive: 'Cannot transcribe — recording is still in progress. Stop the recording first.',
 

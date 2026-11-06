@@ -43,6 +43,8 @@ a.promo:hover, a.promo:focus { color: #222; text-decoration: underline; }
 .pill.recovered { background: rgba(79,124,255,.15); color: #a2bcff; border: 1px solid rgba(79,124,255,.35); }
 .pill.recording { background: rgba(239,95,107,.2); color: #ff8a93; border: 1px solid rgba(239,95,107,.45); animation: pulse-rec 1.5s ease-in-out infinite; }
 .pill.paused { background: rgba(79,124,255,.15); color: #a2bcff; border: 1px solid rgba(79,124,255,.35); }
+.session-source-hint { margin-top: 6px; color: var(--muted); font-size: 12px; }
+.session-source-hint .pill { margin-left: 0; margin-right: 4px; }
 @keyframes pulse-rec { 0%,100% { opacity: 1; } 50% { opacity: .6; } }
 @media (prefers-reduced-motion: reduce) { .pill.recording { animation: none; } }
 
