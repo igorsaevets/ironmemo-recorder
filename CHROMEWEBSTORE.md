@@ -96,7 +96,8 @@ On 2026-10-17 it answered HTTP 200, contained the Limited Use statement, and sho
   and throwing, an update between recordings (the old report stays byte-identical), an
   update DURING a recording (the new build checks the orphan; its report keeps the old
   version) and an old version-2 report. Regressions: `test_p300_25.py` 96/96 (all six
-  engine cases carry `build`), `tests/test_p300_23c_sources.py` 25/25. No permissions,
+  engine cases carry `build`), `tests/test_p300_23c_sources.py` 25/25, mock ingest bench
+  `.claude/scripts/test_ingest.py` 137/137. No permissions,
   privacy/data-flow or API changes: the report stays in OPFS and is never uploaded.
 - P300-26 (2026-11-08): a recording the server ends as **no speech** (backend since
   2026-11-04: `failure_message_key` `error.409.recording_no_speech`, reason `no_speech`,
