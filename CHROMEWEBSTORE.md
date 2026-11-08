@@ -79,7 +79,7 @@ On 2026-10-17 it answered HTTP 200, contained the Limited Use statement, and sho
 - Support: https://github.com/igorsaevets/ironmemo-recorder/issues
 - Homepage (`homepage_url`): https://igorsaevets.github.io/ironmemo-recorder/
 
-## Unreleased changes — 2026-11-06 and 2026-11-08
+## In 2.2.3 — changes of 2026-11-06 and 2026-11-08 (release prepared 2026-11-08, P300-27)
 
 - P300-23c (capture-build subtask, 2026-11-08): every recording's `capture-report.json`
   (now `version: 3`) names the build that CREATED it: `build.version`,
@@ -120,15 +120,15 @@ On 2026-10-17 it answered HTTP 200, contained the Limited Use statement, and sho
 - Measured with offline metadata/filename fixtures in CfT 152: 25/25 checks,
   including legacy `.part` and recovered files. This is UI/source classification,
   not an audio-audibility test. Test: `tests/test_p300_23c_sources.py`.
-- Manifest stays 2.2.2. This change is **not in the previously submitted ZIP**;
-  it requires a future release. No permissions, privacy/data flow or cloud API
-  changes. Refresh the Recordings screenshot for that release. Dashboard and
-  current public-build status were not rechecked in this iteration.
+- These three changes ship in manifest **2.2.3** (P300-27); the manifest differs from
+  2.2.2 only in `version`. No permissions, privacy/data flow or cloud API changes.
+  The store screenshots still show the 2.1.0 Recordings page (see Graphics).
 
 ## Version history
 
 | Version | Submitted | Status | Summary |
 |---|---|---|---|
+| 2.2.3 | not yet (release prepared 2026-11-08, P300-27) | — | A recording the server ends as «no speech» reads «No speech heard — nothing to transcribe.» with what to check and no Retry; the Recordings page marks microphone-only recordings «Microphone only»; every `capture-report.json` names the build that created it |
 | 2.2.2 | 2026-10-30 (owner submitted, dialog «Your extension was submitted for review»; `Status: Pending review`, Submit button disabled). Draft uploaded + descriptions saved by the agent, `compare_crx.py → VERDICT: OK` (48/48 byte-equal, store adds only `_metadata/verified_contents.json` and `update_url`). Prod bench 21/21 on a fresh `+p222prod` account (`03-research/2026-10-30-p300-24c-release-222/RESULT.md`) | Published: the listing says «Updated October 31, 2026» (40 users on 2026-11-08). The public CRX fetched 2026-11-08 through `clients2.google.com/service/update2/crx` (242 208 B, SHA-256 `8916eb77468ac82e1189fe1e9f9636e1545396e264ff303a39f3a6156b90a741`) matches `builds/ironmemo-recorder-v2.2.2.zip`, 48 of 48 files byte-equal. A production run of that zip on 2026-11-08 passed 21/21: the upload reached MinIO on our own host (server log), and the DELETE removed both the database row and the stored objects (`03-research/2026-11-08-upload-check/RESULT.md`) | A link in the popup footer and the Recordings header to `ironmemo.com/transcribe` (UTM-tagged for traffic analytics only, no user data); the small «Chrome Web Store» build line is hidden for a normal store install (it stays visible with the orange highlight for unpacked / sideload / admin builds, which is the only case where the diagnostic is useful) |
 | 2.2.1 | 2026-10-20 (Igor submitted); 2026-10-21 (approved; «Updated October 21, 2026») | Published. The public CRX (via `clients2.google.com/service/update2/crx`, 241 435 B, SHA-256 `2391cb4566309773a32e50478e50a79da85efab6d8115dcd5073dfdab027b1cd`) matches `builds/ironmemo-recorder-v2.2.1.zip`, 48 of 48 files byte-equal; the store adds only `_metadata/verified_contents.json` and `update_url` in the manifest (`runs/p300-24b/`). Igor's own Chrome has auto-updated to 2.2.1 (store install, no saved settings → records mic + tab by default) | A new install records microphone + tab; its first Start no longer fails after the microphone permission page; a profile with no saved settings records WebCodecs/Ogg; the popup shows the version and warns on «Microphone only»; WebM downloads seek. Production run 21/21 with an Ogg upload |
 | 2.2.0 | 2026-10-08 | Published. The listing says «Updated October 8, 2026»; seen live 2026-10-11; 57 users on 2026-10-17 | The account line, the price before an upload, «waiting for payment», accounts with several workspaces. The store's draft CRX matched the tested zip, 46 of 46 files byte-equal, and so did the published CRX on 2026-10-20 |

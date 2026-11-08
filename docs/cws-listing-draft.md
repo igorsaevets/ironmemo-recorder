@@ -1,5 +1,7 @@
-# CWS Listing Description — v2.2.2 draft
+# CWS Listing Description — v2.2.3 draft
 
+v2.2.3 (2026-11-08, P300-27): the «New in» line names the two user-visible changes in 2.2.3 — the «No speech heard»
+row (P300-26) and the «Microphone only» label (P300-23c); the 2.2.2, 2.2.1 and 2.2.0 items stay in the same paragraph.
 v2.2.2 (2026-10-30): the «New in» line adds the one user-visible change in 2.2.2 — a link in the popup and the
 Recordings page that opens the service's own transcription landing (ironmemo.com/transcribe). The 2.2.1 and 2.2.0
 items stay in the same paragraph.
@@ -46,7 +48,7 @@ Click Transcribe on any recording to send it to IronMemo for a text transcript a
 • The local recording stays on your device — the upload is a copy, not a move
 • You can delete the server copy at any time from the Recordings page
 
-🆕 New in 2.2.2: a link to transcribe your recordings on ironmemo.com — in the popup and the Recordings page. New in 2.2.1: a new install records your microphone and the tab together (before, only the microphone), and the popup warns you when only your microphone is being recorded. New in 2.2.0: credits and free minutes on the Recordings page, the price before an upload, a clear "waiting for payment" state, and accounts with several workspaces.
+🆕 New in 2.2.3: when a recording has no speech in it (say, a muted or blocked microphone), the Recordings page says so and tells you what to check, instead of offering to send the same file again; recordings that hold only your microphone are marked "Microphone only". New in 2.2.2: a link to transcribe your recordings on ironmemo.com — in the popup and the Recordings page. New in 2.2.1: a new install records your microphone and the tab together (before, only the microphone), and the popup warns you when only your microphone is being recorded. New in 2.2.0: credits and free minutes on the Recordings page, the price before an upload, a clear "waiting for payment" state, and accounts with several workspaces.
 
 ⛔ What it does NOT do
 
@@ -98,7 +100,7 @@ Source code (MIT): https://github.com/igorsaevets/ironmemo-recorder
 • Локальная запись остаётся на устройстве — загружается копия, не оригинал
 • Серверную копию можно удалить в любой момент со страницы «Записи»
 
-🆕 Новое в 2.2.2: ссылка на расшифровку записей на ironmemo.com — в окне расширения и на странице «Записи». Новое в 2.2.1: после установки записываются сразу микрофон и звук вкладки (раньше — только микрофон), а окно расширения предупреждает, когда записывается только ваш микрофон. Новое в 2.2.0: кредиты и бесплатные минуты на странице «Записи», цена до загрузки, понятный статус «ждёт оплаты» и аккаунты с несколькими рабочими пространствами.
+🆕 Новое в 2.2.3: если в записи нет речи (например, микрофон был выключен или заблокирован), страница «Записи» прямо говорит об этом и подсказывает, что проверить, а не предлагает отправить тот же файл ещё раз; записи только с вашего микрофона помечены «Microphone only». Новое в 2.2.2: ссылка на расшифровку записей на ironmemo.com — в окне расширения и на странице «Записи». Новое в 2.2.1: после установки записываются сразу микрофон и звук вкладки (раньше — только микрофон), а окно расширения предупреждает, когда записывается только ваш микрофон. Новое в 2.2.0: кредиты и бесплатные минуты на странице «Записи», цена до загрузки, понятный статус «ждёт оплаты» и аккаунты с несколькими рабочими пространствами.
 
 ⛔ Чего НЕ делает
 
@@ -121,6 +123,19 @@ Source code (MIT): https://github.com/igorsaevets/ironmemo-recorder
 ```
 
 ---
+
+## Changes from v2.2.2 listing (v2.2.3)
+
+1. **«New in» line** (EN + RU), each part runtime-tested in CfT 152:
+   - a recording the server ends as «no speech» reads «No speech heard — nothing to transcribe.» with what to check,
+     and offers no Retry (mock bench `.claude/scripts/test_ingest.py` 137/137, P300-26; the production run of the
+     2.2.3 zip with a silent recording: `03-research/2026-11-08-p300-27-release-223/RESULT.md`);
+   - the Recordings page marks a recording that holds only the microphone «Microphone only»
+     (`tests/test_p300_23c_sources.py` 25/25, P300-23c).
+   The 2.2.2, 2.2.1 and 2.2.0 items stay.
+2. **Not claimed**: the creating build in every `capture-report.json` (P300-23c, a diagnostic with no user action),
+   the «Mix» asset name.
+3. **No new permissions**: the manifest differs from 2.2.2 only in `version`.
 
 ## Changes from v2.2.1 listing (v2.2.2)
 
