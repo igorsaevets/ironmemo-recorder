@@ -583,13 +583,20 @@ function renderIngest(el, s) {
     } else if (r === 'wrong_account') {
       status = S.wrongAccount; hint = escapeHtml(S.wrongAccountHint);
       buttons.push(['claim-open', S.account.btnReconnect, 'primary']);
+    } else if (r === 'no_speech') {
+      // P300-26: the server's terminal outcome, not a fault. Retry, and Dismiss (its cancelled row offers
+      // «Transcribe again»), would send the same silent file for the same empty answer; only the server
+      // copy can go.
+      cls = 'warn'; status = S.noSpeech; hint = escapeHtml(S.noSpeechHint);
+      if (job.serverDeleted) banners.push(['muted', escapeHtml(S.noSpeechDeleted)]);
+      else if (job.recordingId && !running) buttons.push(['delete-server', S.btnDeleteServer, 'danger']);
     } else {
       status = S.failed(reasonText(r));
       const human = S.reasonHints[r];
       hint = human ? escapeHtml(human) : (job.lastError?.message ? escapeHtml(job.lastError.message) : '');
       if (!NO_RETRY.includes(r)) buttons.push(['ingest-retry', S.btnRetry, 'primary']);
     }
-    buttons.push(['ingest-cancel', S.btnDismiss, 'danger']);
+    if (r !== 'no_speech') buttons.push(['ingest-cancel', S.btnDismiss, 'danger']);
   } else if (st === 'paused') {
     cls = 'muted';
     status = S.paused[job.stateReason] ?? S.pausedOther(job.stateReason);

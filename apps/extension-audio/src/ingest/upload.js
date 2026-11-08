@@ -170,6 +170,8 @@ async function assertOrigin(url, isOriginAllowed) {
   return origin;
 }
 
+const serverKey = (v) => (typeof v === 'string' && /^[a-z0-9_.]{1,80}$/i.test(v) ? v : null);
+
 /** Whitelist of RecordingResponse fields the UI needs (no free-form server text is kept). */
 export function summarizeRecording(rec) {
   if (!rec || typeof rec !== 'object') return null;
@@ -183,6 +185,9 @@ export function summarizeRecording(rec) {
     provider_used: typeof rec.provider_used === 'string' ? rec.provider_used.slice(0, 40) : null,
     free_cap: rec.free_cap ?? null, failed_insufficient_credits: rec.failed_insufficient_credits ?? null,
     mic_skipped_insufficient_credits: rec.mic_skipped_insufficient_credits ?? null,
+    // P300-26: the server's named outcome of a failed recording (views.py _recording_to_dto, since
+    // 2026-11-04). Machine keys, not prose: kept only when they look like one.
+    failure_reason: serverKey(rec.failure_reason), failure_message_key: serverKey(rec.failure_message_key),
     // I4b: the transcript panel shows the language and keeps the markdown summary next to the
     // transcript files. `credits_charged` is NOT kept — a placeholder 0 in the DTO
     // (recordings_ext/views.py _recording_to_dto) that must never be shown as a verified charge.

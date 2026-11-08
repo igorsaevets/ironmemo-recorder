@@ -128,6 +128,12 @@ export const S = Object.freeze({
   networkError:'No connection to IronMemo.',
   networkErrorHint: 'Check your internet connection, then Retry. Nothing was lost: the upload continues from the last confirmed part.',
   tooLarge: 'The file is larger than IronMemo accepts.',
+  // P300-26: the server's terminal outcome `error.409.recording_no_speech` (backend since 2026-11-04). The
+  // first hint sentence follows the server's own text for that key (iron-recordings docs/errors.json); the
+  // rest says what to check, because sending the same file again gets the same answer.
+  noSpeech: 'No speech heard — nothing to transcribe.',
+  noSpeechHint: 'IronMemo could not hear any speech in this recording, so there is no transcript. Play it here to check: if it is silent, the microphone was muted, blocked or not the one your call uses, or the tab played no sound. Sending the same file again gives the same result.',
+  noSpeechDeleted: 'Deleted on IronMemo. The local recording is kept in this browser.',
   lostSession: 'Your IronMemo session is no longer valid.',
   lostSessionHint: (emailMode) => (emailMode
     ? 'Reconnect verifies your e-mail again (a one-time code) and continues this upload under the same IronMemo account.'
@@ -166,6 +172,7 @@ export const S = Object.freeze({
     email_taken: 'this e-mail belongs to another IronMemo account',
     captcha: 'IronMemo asks for a captcha on this network',
     server_error: 'IronMemo could not process the recording',
+    no_speech: 'IronMemo heard no speech in the recording',
     server_deleted: 'the recording was deleted on IronMemo',
     not_found: 'the transcript is not on the server yet',
     shape: 'the server answered in an unexpected form',

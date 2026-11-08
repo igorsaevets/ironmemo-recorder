@@ -74,6 +74,23 @@ function clamp(n, lo, hi) { const x = Number(n); return Number.isFinite(x) ? Mat
 function parkReason(rec) { return rec?.failed_insufficient_credits ? 'insufficient_credits' : 'payment_required'; }
 
 /**
+ * P300-26: why the server ended a recording in `error`. Since 2026-11-04 (iron-note-backend 2f85e25c,
+ * stapel-recordings 0.43.0) a recording in which every speech-to-text provider heard nothing ends with
+ * failure_message_key `error.409.recording_no_speech` (failure_reason `no_speech`): a terminal outcome,
+ * a retry returns the same empty answer. The key is the server's final sentence (views.py
+ * _recording_to_dto: media fault → hold → staff acknowledgement), so it decides; the reason is the
+ * fallback for a DTO without the key. Older failures (`empty_transcript`, all providers empty) carry the
+ * same key. Every other failure keeps the generic `server_<status>`.
+ */
+const NO_SPEECH_KEY = 'error.409.recording_no_speech';
+function serverFailureReason(rec) {
+  if (rec?.failed_insufficient_credits) return 'insufficient_credits';
+  const key = rec?.failure_message_key ?? null;
+  if (key === NO_SPEECH_KEY || (key === null && rec?.failure_reason === 'no_speech')) return 'no_speech';
+  return `server_${rec?.status}`;
+}
+
+/**
  * P300-3: a price read (and, P300-3b, an account-line read) that takes longer than this is dropped; a dropped price
  * never blocks the upload (the server still decides).
  */
@@ -659,7 +676,7 @@ export class IngestController {
           await this.fetchTranscript(job, signal, save); // I4b: the transcript comes back right here
           return;
         }
-        job.state = 'error'; job.stateReason = rec.failed_insufficient_credits ? 'insufficient_credits' : `server_${rec.status}`;
+        job.state = 'error'; job.stateReason = serverFailureReason(rec);
         await save(job);
         return;
       }

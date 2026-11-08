@@ -79,9 +79,22 @@ On 2026-10-17 it answered HTTP 200, contained the Limited Use statement, and sho
 - Support: https://github.com/igorsaevets/ironmemo-recorder/issues
 - Homepage (`homepage_url`): https://igorsaevets.github.io/ironmemo-recorder/
 
-## Unreleased changes — 2026-11-06
+## Unreleased changes — 2026-11-06 and 2026-11-08
 
-- P300-23c (source-label subtask): Recordings shows **Microphone only** with
+- P300-26 (2026-11-08): a recording the server ends as **no speech** (backend since
+  2026-11-04: `failure_message_key` `error.409.recording_no_speech`, reason `no_speech`,
+  or `empty_transcript` for failures from before stapel-recordings 0.43.0) now reads
+  **No speech heard — nothing to transcribe.** with what to check: a muted, blocked or
+  wrong microphone, or a silent tab. Retry and Dismiss are gone from that row, since
+  sending the same file again gets the same answer; **Delete on server** stays. Every
+  other server error renders as before. The local job record now keeps the DTO's
+  `failure_reason` and `failure_message_key`.
+- Measured with the mock bench `.claude/scripts/test_ingest.py` in CfT 152: 137/137
+  (131/131 on the unchanged code; 6 new gates: no speech by key, by the legacy reason,
+  by the reason alone, Delete on server, and two controls that must stay generic).
+  Production has 3 `no_speech` failures since 2026-11-02, all web uploads (read-only
+  DB count). No permissions, privacy/data flow or API changes.
+- P300-23c (source-label subtask, 2026-11-06): Recordings shows **Microphone only** with
   **No tab audio track in this recording.** when the saved source evidence supports
   it. A microphone-only mix is supported; ambiguous mixes, contradictory tab
   evidence and active/paused captures are left unclassified. Rename/reopen retains
