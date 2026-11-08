@@ -178,9 +178,14 @@ async function probeWebCodecs({ streamId = null, withMic = true } = {}) {
 
 // ───────────────────────────────────────────────────── старт ──
 
-async function start({ sessionId, streamId, settings, startTimings = null, sourceType = null }) {
+async function start({ sessionId, streamId, settings, startTimings = null, sourceType = null, build = null }) {
   if (state.sessionId) throw new Error('Запись уже идёт.');
   state.sessionId = sessionId;
+  // P300-23c: the build that creates this recording, snapshotted by the service worker at Start (this document has
+  // no chrome.management). The same object goes into every report of the session and the journal's session_open;
+  // nothing re-reads it later, so an update between Start and Stop or a later recovery cannot relabel the recording.
+  // null = START came without a snapshot = unknown.
+  state.build = build && typeof build === 'object' ? build : null;
   // The service worker hands over the RAW stored object ({} on a fresh install): a key it lacks takes the
   // schema default here, not a g() fallback (P300-25: a fresh install recorded MediaRecorder/WebM, ADR-004 says
   // WebCodecs/Ogg). storedSettingKeys tells the report which values were the user's.
@@ -751,7 +756,7 @@ async function startWebCodecs(applied) {
   state.worker.onerror = (e) => report('error', { error: `Worker crashed: ${e.message}` });
 
   const opened = await workerRequest({
-    type: 'OPEN_SESSION', sessionId: state.sessionId, t0: state.timeline,
+    type: 'OPEN_SESSION', sessionId: state.sessionId, t0: state.timeline, build: state.build,
     opts: {
       flushIntervalMs: g('storage.flushIntervalMs', 1000),
       journalEnabled: g('storage.journalEnabled', true),
@@ -1127,9 +1132,12 @@ function meanInterval(arr) {
 function buildCaptureReport(final) {
   const rows = requestedVsApplied(final);
   return {
-    kind: 'ironmemo-capture-report', version: 2, final,
+    // version 3 (P300-23c) adds `build`. A version-2 report has none: the build that made it was not recorded —
+    // never assume the installed one.
+    kind: 'ironmemo-capture-report', version: 3, final,
     sessionId: state.sessionId, engine: state.engine,
     writtenAt: new Date().toISOString(),
+    build: state.build ?? null,
     browser: { userAgent: navigator.userAgent, uaData: navigator.userAgentData
       ? { platform: navigator.userAgentData.platform, brands: navigator.userAgentData.brands } : null },
     timeline: state.timeline,

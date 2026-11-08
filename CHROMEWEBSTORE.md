@@ -81,6 +81,23 @@ On 2026-10-17 it answered HTTP 200, contained the Limited Use statement, and sho
 
 ## Unreleased changes — 2026-11-06 and 2026-11-08
 
+- P300-23c (capture-build subtask, 2026-11-08): every recording's `capture-report.json`
+  (now `version: 3`) names the build that CREATED it: `build.version`,
+  `build.installType` (`chrome.management.getSelf()`; `null` + `installTypeNote` when
+  unknown, never a guess), `build.storeItem`, `capturedAt`, `capturedBy`. The service
+  worker snapshots it when Start arrives (the offscreen document has only
+  `chrome.runtime`), bounded at 1 s; the same object goes into the report written at
+  Start, the final report and the journal's `session_open` line, so an update or a
+  later recovery never relabels a recording. Version-2 reports have no `build`.
+- Measured with `tests/test_p300_23c_build.py` (real synthetic capture in CfT 152: fake
+  microphone + local tone tab, no device, no network): 43/43 (23/43 on the unchanged
+  code — every build check failed, so the old comment saying the data was saved was
+  wrong). Includes getSelf hanging (Start 1.1 s, `installType: null` with the reason)
+  and throwing, an update between recordings (the old report stays byte-identical), an
+  update DURING a recording (the new build checks the orphan; its report keeps the old
+  version) and an old version-2 report. Regressions: `test_p300_25.py` 96/96 (all six
+  engine cases carry `build`), `tests/test_p300_23c_sources.py` 25/25. No permissions,
+  privacy/data-flow or API changes: the report stays in OPFS and is never uploaded.
 - P300-26 (2026-11-08): a recording the server ends as **no speech** (backend since
   2026-11-04: `failure_message_key` `error.409.recording_no_speech`, reason `no_speech`,
   or `empty_transcript` for failures from before stapel-recordings 0.43.0) now reads

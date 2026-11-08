@@ -105,7 +105,7 @@ async function handle(msg) {
 
 // ──────────────────────────────────────────────────────────── session ──
 
-async function openSession({ sessionId, t0, opts = {}, settingsSnapshot = null }) {
+async function openSession({ sessionId, t0, build = null, opts = {}, settingsSnapshot = null }) {
   const root = await navigator.storage.getDirectory();
   const sessions = await root.getDirectoryHandle('sessions', { create: true });
   const dir = await sessions.getDirectoryHandle(sessionId, { create: true });
@@ -121,7 +121,8 @@ async function openSession({ sessionId, t0, opts = {}, settingsSnapshot = null }
     openedWall: Date.now(), openedMono: performance.now(),
     fatal: null, journalFailed: false,
   };
-  journal({ t: 'session_open', sessionId, t0, opts: session.opts, workerTimeOrigin: performance.timeOrigin });
+  // `build` (P300-23c): the creating build, first line of the journal — kept even if no report gets written.
+  journal({ t: 'session_open', sessionId, t0, build, opts: session.opts, workerTimeOrigin: performance.timeOrigin });
   session.flushTimer = setInterval(() => { for (const r of roles.values()) flushRole(r).catch(reportErr(r.role)); },
                                    session.opts.flushIntervalMs);
   session.checkpointTimer = setInterval(checkpoint, CHECKPOINT_MS);

@@ -33,6 +33,7 @@
 
 import { getByPath } from '../shared/settings-schema.js';
 import { sourceTypeFromUrl } from '../ingest/source-type.js';
+import { buildSnapshot } from '../shared/build-info.js';
 
 // Момент старта ЭТОГО экземпляра service worker'а. performance.now() при
 // получении START = сколько worker уже живёт: малое значение = холодный старт.
@@ -148,6 +149,9 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
   const mark = (name) => { T.marks[name] = Date.now() - T.receivedAt; };
   await setState({ status: 'starting', error: null });
   mark('stateStarting');
+  // P300-23c: which build creates this recording. Bounded (1 s) and never rejects; awaited after the offscreen
+  // document is ready, so it overlaps that step and never sits between the tab stream ID and START.
+  const buildP = buildSnapshot();
   try {
     const settings = (await chrome.storage.local.get('ironmemo.settings.v1'))['ironmemo.settings.v1'] ?? {};
     mark('settingsLoaded');
@@ -185,6 +189,8 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
     const off = await ensureOffscreen();
     T.offscreenExisted = off.existed;
     mark('offscreenReady');
+    const build = await buildP;
+    mark('buildCaptured');
 
     // ── 3. Захват звука вкладки (если нужен) — под user gesture ──
     let streamId = null;
@@ -206,7 +212,7 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
     // ── 4. START в offscreen — сразу, пока streamId ещё жив ──
     const sessionId = crypto.randomUUID();
     const res = await chrome.runtime.sendMessage({
-      target: 'offscreen', type: 'START', sessionId, streamId, settings, startTimings: T, sourceType,
+      target: 'offscreen', type: 'START', sessionId, streamId, settings, startTimings: T, sourceType, build,
     });
     mark('offscreenStarted');
     if (!res?.ok) throw new Error(res?.error ?? 'Offscreen-документ не подтвердил старт.');
