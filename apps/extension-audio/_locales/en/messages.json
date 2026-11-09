@@ -10,5 +10,13 @@
   "actionTitle": {
     "message": "IronMemo Audio Recorder",
     "description": "Tooltip on the toolbar icon."
+  },
+  "menuRecordThisTab": {
+    "message": "Record this tab with IronMemo",
+    "description": "Context-menu item on a page and on a tab in the tab strip: starts recording that tab's audio."
+  },
+  "commandRecordThisTab": {
+    "message": "Record this tab",
+    "description": "Keyboard shortcut description on chrome://extensions/shortcuts: records the tab that is open."
   }
 }

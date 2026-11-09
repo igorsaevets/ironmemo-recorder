@@ -34,6 +34,8 @@
 import { getByPath } from '../shared/settings-schema.js';
 import { sourceTypeFromUrl } from '../ingest/source-type.js';
 import { buildSnapshot } from '../shared/build-info.js';
+import { ENTRY } from '../shared/strings.js';
+import { ENTRY_COMMAND, ENTRY_MENU_ID, PENDING_ENTRY_KEY, hasRecordingConsent } from '../shared/record-entry.js';
 
 // Момент старта ЭТОГО экземпляра service worker'а. performance.now() при
 // получении START = сколько worker уже живёт: малое значение = холодный старт.
@@ -142,10 +144,13 @@ async function closeOffscreenIfIdle() {
 
 // ───────────────────────────────────────────────── команды ──
 
-async function startCapture({ tabId, clickedAt = null } = {}) {
+async function startCapture({ tabId, clickedAt = null, via = 'popup' } = {}) {
   // Замер холодного старта (PLAN-CHANGES B3): каждая ступень — с меткой времени.
   // swAgeMs — сколько service worker жил к моменту START; < ~200 мс = холодный.
-  const T = { clickedAt, receivedAt: Date.now(), swAgeMs: Math.round(performance.now()), swBootWall: SW_BOOT.wall, marks: {} };
+  // P300-28d: `entry` says which entry started the recording (popup Start, context menu, shortcut); it lands in the
+  // capture report's timeline with the rest of the timings.
+  const T = { clickedAt, receivedAt: Date.now(), swAgeMs: Math.round(performance.now()), swBootWall: SW_BOOT.wall, marks: {},
+              entry: { via } };
   const mark = (name) => { T.marks[name] = Date.now() - T.receivedAt; };
   await setState({ status: 'starting', error: null });
   mark('stateStarting');
@@ -153,9 +158,18 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
   // document is ready, so it overlaps that step and never sits between the tab stream ID and START.
   const buildP = buildSnapshot();
   try {
-    const settings = (await chrome.storage.local.get('ironmemo.settings.v1'))['ironmemo.settings.v1'] ?? {};
+    let settings = (await chrome.storage.local.get('ironmemo.settings.v1'))['ironmemo.settings.v1'] ?? {};
     mark('settingsLoaded');
-    const mode = settings?.source?.mode ?? 'mic+tab';
+    const savedMode = settings?.source?.mode ?? 'mic+tab';
+    // P300-28d: «Record this tab» (menu or shortcut) is a request for THAT tab's audio, so it records the tab even
+    // under «Microphone only»; the microphone stays as set. Only this recording changes, not the saved setting, and
+    // the capture report says so (startTimings.entry: savedMode → usedMode).
+    const mode = (via === 'menu' || via === 'shortcut') && savedMode === 'mic' ? 'mic+tab' : savedMode;
+    if (mode !== savedMode) {
+      settings = { ...settings, source: { ...(settings.source ?? {}), mode } };
+      T.entry.savedMode = savedMode;
+      T.entry.usedMode = mode;
+    }
     const needsMic = mode === 'mic' || mode === 'mic+tab';
     const needsTab = mode === 'tab' || mode === 'mic+tab';
 
@@ -225,12 +239,14 @@ async function startCapture({ tabId, clickedAt = null } = {}) {
       mediaElapsedMs: 0, lastResumedAt: now,
       appliedReport: res.appliedReport ?? null, startTimings: T,
       lastStopped: null, // I4b: the popup's «Transcribe with IronMemo →» line refers to the LAST stopped recording
+      // P300-28d: the captured tab's id (a number, no URL) tells «this tab is already recorded» from «another tab is»
+      tabId: needsTab ? targetTab.id : null, entryNotice: null,
     });
   } catch (e) {
     const raw = String(e?.message ?? e);
     // Раскрываем известные ошибки в понятный человеку текст. Оригинал — в поле errorRaw.
     const msg = translateError(raw);
-    await setState({ status: 'error', error: msg, errorRaw: raw });
+    await setState({ status: 'error', error: msg, errorRaw: raw, tabId: null });
     await closeOffscreenIfIdle();
     throw e;
   }
@@ -254,6 +270,10 @@ function translateError(raw) {
   if (/streamId/i.test(raw) || /stream.*expired/i.test(raw)) {
     return 'Идентификатор захвата вкладки истёк. Попробуйте ещё раз.';
   }
+  // P300-28d: the tab was not chosen for IronMemo, or it moved to another site since (Chrome clears the right then)
+  if (/Chrome pages cannot be captured|has not been invoked for the current page/i.test(raw)) {
+    return ENTRY.notCapturable(chrome.i18n.getMessage('menuRecordThisTab') || 'Record this tab with IronMemo');
+  }
   return raw;
 }
 
@@ -264,7 +284,7 @@ async function stopCapture() {
     .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   const next = await setState({
     status: 'idle', sessionId: null, startedAt: null, progress: null, lastWarning: null, lastInfo: null,
-    mediaElapsedMs: null, lastResumedAt: null,
+    mediaElapsedMs: null, lastResumedAt: null, tabId: null, entryNotice: null,
     lastResult: res?.result ?? null, error: res?.ok ? null : (res?.error ?? null),
     // I4b task 4: the popup offers one line «Transcribe with IronMemo →» for the recording that just stopped
     lastStopped: prev?.sessionId && res?.ok ? { sessionId: prev.sessionId, at: Date.now() } : null,
@@ -337,7 +357,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             const s = await getState();
             await setState({ status: 'error', error: msg.error, errorRaw: JSON.stringify(msg.fatal ?? null),
                              sessionId: null, startedAt: null, progress: null, lastResult: msg.result ?? null,
-                             mediaElapsedMs: null, lastResumedAt: null,
+                             mediaElapsedMs: null, lastResumedAt: null, tabId: null,
                              stoppedByFatal: { sessionId: s.sessionId, at: Date.now(), fatal: msg.fatal ?? null } });
             await closeOffscreenIfIdle();
           }
@@ -363,6 +383,84 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   return true;
 });
+
+// ─────────────────────── P300-28d: «Record this tab» — the context-menu item and the keyboard shortcut ──
+//
+// Both are user gestures ON a tab: before the event reaches this worker, Chrome gives the extension the right to
+// capture exactly that tab (kTabCaptureForTab) — in any window, and for a background tab right-clicked in the tab
+// strip (measured in P300-28c on CfT 152/154/157; the tab strip read in Chromium tab_menu_model.cc → menu_manager.cc).
+// The popup's Start is unchanged: it records the active tab of the window whose toolbar icon was clicked.
+
+const ENTRY_BUSY = new Set(['starting', 'awaiting_perm', 'recording', 'paused']);
+let entryInFlight = false; // one click / key press at a time; a restarted worker only drops this guard
+
+function registerEntryMenu() {
+  const contexts = ['page', 'frame', 'selection', 'link', 'editable', 'image', 'video', 'audio'];
+  // Chrome 150+: the tab strip's own menu. Older Chrome rejects an unknown context, so add it only when it is known.
+  if (chrome.contextMenus.ContextType?.TAB) contexts.push(chrome.contextMenus.ContextType.TAB);
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: ENTRY_MENU_ID,
+      title: chrome.i18n.getMessage('menuRecordThisTab') || 'Record this tab with IronMemo',
+      contexts,
+      // Page menus only: browser and extension pages cannot be captured. The tab strip's menu does not apply this
+      // filter (Chromium context_menu_matcher.cc), so a browser page's tab still shows the item; a click on it ends
+      // in ENTRY.notCapturable, shown in the popup.
+      documentUrlPatterns: ['http://*/*', 'https://*/*', 'file:///*'],
+    }, () => { if (chrome.runtime.lastError) console.warn('[sw] context menu', chrome.runtime.lastError.message); });
+  });
+}
+
+chrome.runtime.onInstalled.addListener(registerEntryMenu);
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === ENTRY_MENU_ID) startFromEntry(tab, 'menu');
+});
+
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command === ENTRY_COMMAND) startFromEntry(tab, 'shortcut');
+});
+
+/** chrome.action.openPopup: every extension from Chrome 127 (policy-installed extensions only in 118–126). */
+async function openPopupSafe(windowId) {
+  try {
+    await chrome.action.openPopup(windowId != null ? { windowId } : undefined);
+    return true;
+  } catch (e) {
+    console.warn('[sw] openPopup', e);
+    return false;
+  }
+}
+
+async function startFromEntry(tab, via) {
+  if (!tab?.id || tab.id === chrome.tabs.TAB_ID_NONE || entryInFlight) return;
+  entryInFlight = true;
+  try {
+    const s = await getState();
+    if (ENTRY_BUSY.has(s.status)) {
+      // One recording at a time (the offscreen pipeline records one tab): say so in the popup; never stop or switch.
+      await setState({ entryNotice: { kind: s.tabId === tab.id ? 'busy-same' : 'busy-other', at: Date.now() } });
+      await openPopupSafe(tab.windowId);
+      return;
+    }
+    if (!(await hasRecordingConsent())) {
+      // The recording notice comes first: the popup shows it and starts this request after Continue.
+      await chrome.storage.session.set({ [PENDING_ENTRY_KEY]: { tabId: tab.id, via, at: Date.now() } });
+      if (!(await openPopupSafe(tab.windowId))) {
+        await chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/popup.html'), windowId: tab.windowId });
+      }
+      return;
+    }
+    await setState({ status: 'starting', error: null }); // from here a second click sees «busy»
+  } finally {
+    entryInFlight = false;
+  }
+  try {
+    await startCapture({ tabId: tab.id, clickedAt: Date.now(), via });
+  } catch {
+    await openPopupSafe(tab.windowId); // startCapture stored the error text; the popup shows it
+  }
+}
 
 // ───────────────────────────────── прерванная запись: обнаружение и проверка ──
 //

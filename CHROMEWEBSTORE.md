@@ -1,6 +1,6 @@
 # Chrome Web Store record — IronMemo
 
-> Last Updated: 2026-11-08 · item `epnajjfddhbhgabhmcaomfnjhnhjnchd` · publisher «Ironmemo»
+> Last Updated: 2026-11-09 · item `epnajjfddhbhgabhmcaomfnjhnhjnchd` · publisher «Ironmemo»
 
 This is the file Google's `chrome-extensions` agent skill (GoogleChrome/modern-web-guidance) keeps
 for an extension: what the Developer Dashboard asks for, and where each value comes from. One home
@@ -38,6 +38,15 @@ justification texts have not been copied here yet.
 | `storage` | permissions | Recording settings, consent state and IronMemo tokens in `chrome.storage.local` | none |
 | `unlimitedStorage` | permissions | Long recordings must not be cut by Chrome's default quota (up to ~65 MB per hour with all tracks) | none |
 | `https://app.ironmemo.com/*` | optional_host_permissions | Requested only when the user clicks Transcribe and accepts the cloud consent | none once granted (covered by the line above) |
+| `contextMenus` (next version after 2.2.3, P300-28d) | permissions | One item, «Record this tab with IronMemo», on page menus and on the tab strip's menu of a tab | none: the warning list equals 2.2.3's on CfT 152 and 157 (2026-11-09, `.claude/scripts/permission_warnings_p300_28d.py`) |
+| `commands` → `record-this-tab` (same version; a manifest key, not a permission) | commands | Ctrl+Shift+Y (⌘⇧Y on Mac) records the open tab | none (same measurement) |
+
+**Dashboard justification for `contextMenus` (draft, paste when the version that adds it is submitted):**
+«Adds one item, “Record this tab with IronMemo”, to the right-click menu of web pages and of tabs in the tab strip.
+Choosing it starts recording the audio of that tab — the same action as pressing Start in the extension's popup on
+that tab — so a user can record a meeting that runs in another tab or window without switching to it first. The
+extension uses only the tab's id from the click; the page address, selected text and link passed with the click are
+not used or stored.»
 
 **Before adding a permission**, measure what it adds. «When a new permission that triggers a warning
 is added, the extension will be disabled until the user accepts the new permission»
@@ -78,6 +87,19 @@ On 2026-10-17 it answered HTTP 200, contained the Limited Use statement, and sho
 - Publisher: Ironmemo. The contact e-mail and address are kept in the dashboard and not copied here.
 - Support: https://github.com/igorsaevets/ironmemo-recorder/issues
 - Homepage (`homepage_url`): https://igorsaevets.github.io/ironmemo-recorder/
+
+## Next version (not built, not submitted) — «Record this tab», 2026-11-09 (P300-28d)
+
+- A right-click item «Record this tab with IronMemo» on web pages and, from Chrome 150, on a tab in the tab strip, and
+  the shortcut Ctrl+Shift+Y (⌘⇧Y on Mac): IronMemo records exactly that tab (plus the microphone per settings), in
+  any window, also a background tab. Before the recording notice is accepted, the item opens the popup with the notice
+  and starts after Continue. During a recording it starts nothing and the popup says so. Under «Microphone only» this
+  one recording also takes the tab; the saved setting is unchanged and the capture report records it.
+- Measured on CfT 152.0.7977.82 and 157.0.8103.38 with a tone per tab: every entry recorded the intended tab (margin
+  ≥ 67 dB over the other tones), a never-invoked tab is refused with a readable message, install warnings unchanged,
+  START benches green. `03-research/2026-11-09-p300-28d-record-this-tab/RESULT.md` (project folder, not this repo).
+- Privacy policy §9 names `contextMenus` and the shortcut, marked «in the next version after 2.2.3». The listing
+  copy and the version number are for the release prompt.
 
 ## In 2.2.3 — changes of 2026-11-06 and 2026-11-08 (release prepared 2026-11-08, P300-27)
 

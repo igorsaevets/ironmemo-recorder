@@ -1,18 +1,20 @@
 import { loadSettings, saveSettingsPatch } from '../shared/settings-store.js';
 import { getByPath, estimateMBPerHour } from '../shared/settings-schema.js';
-import { POPUP } from '../shared/strings.js';
+import { ENTRY, POPUP } from '../shared/strings.js';
 import { listAudioDevices, resolveDevice, DEVICE_CLASS } from '../shared/audio-devices.js';
 import { renderBuildLine, renderPromo } from '../shared/build-info.js';
+import { CONSENT_KEY, CONSENT_VERSION, ENTRY_COMMAND, ENTRY_NOTICE_MAX_AGE_MS, PENDING_ENTRY_KEY,
+         PENDING_ENTRY_MAX_AGE_MS } from '../shared/record-entry.js';
 
 const $ = (id) => document.getElementById(id);
 let timerHandle = null;
 let uploadEnabled = true; // settings upload.enabled — the after-stop line is only offered when the feature is on
+let entryShortcut = ''; // P300-28d: the key Chrome actually assigned to «Record this tab» ('' when none)
 
 // CWS Purple Nickel: prominent disclosure BEFORE first data collection. C7 in checklist.
-// Bumping the version key forces the overlay to reappear on the next popup open,
+// Bumping the version key (CONSENT_VERSION in record-entry.js, shared with the service worker since P300-28d:
+// the context menu and the shortcut check the same notice) forces the overlay to reappear on the next popup open,
 // which is how Purple Nickel wants a change in data practices communicated.
-const CONSENT_KEY = 'ironmemo.consent.v1';
-const CONSENT_VERSION = 4;
 // I4b (2026-09-13): the notice gained one neutral sentence about OPTIONAL transcription. The
 // version is NOT bumped (nobody who records locally is asked again — ADR-008 «Уточнения» 5); the
 // text id changes so the stored record says which text was shown. Cloud processing has its own
@@ -85,8 +87,25 @@ function showConsent() {
     } catch (e) {
       btn.disabled = false;
       console.error('[popup] consent save failed', e);
+      return;
     }
+    await runPendingEntry();
   });
+}
+
+/**
+ * P300-28d: «Record this tab» used before the recording notice was accepted stored its tab and opened this popup.
+ * The notice is accepted now, so record that tab (not the active one: a tab-strip click may name a background tab).
+ */
+async function runPendingEntry() {
+  try {
+    const p = (await chrome.storage.session.get(PENDING_ENTRY_KEY))[PENDING_ENTRY_KEY];
+    await chrome.storage.session.remove(PENDING_ENTRY_KEY);
+    if (!p?.tabId || !(Date.now() - p.at <= PENDING_ENTRY_MAX_AGE_MS)) return;
+    await send('START', { tabId: p.tabId, via: p.via, clickedAt: Date.now() });
+  } catch (e) {
+    console.warn('[popup] pending entry', e);
+  }
 }
 
 async function init() {
@@ -95,6 +114,9 @@ async function init() {
   // before the Start button even works. Exposed for the test bench.
   const tBoot = performance.now();
   await renderConfig();
+  try {
+    entryShortcut = (await chrome.commands.getAll()).find((c) => c.name === ENTRY_COMMAND)?.shortcut ?? '';
+  } catch { entryShortcut = ''; }
   const first = await state();
   window.__ironmemoBoot = { getStateMs: Math.round(performance.now() - tBoot), status: first.status, at: Date.now() };
   await refresh();
@@ -334,6 +356,19 @@ async function refresh() {
     $('transcribeLink').dataset.sid = stopped.sessionId;
     $('afterStopHint').textContent = POPUP.transcribeHint;
   }
+
+  // P300-28d: how to record a meeting that is in another tab (shown before a recording) and, after a menu click or a
+  // shortcut press during a recording, why nothing new started.
+  const idleLike = s.status === 'idle' || s.status === 'error';
+  $('entryHint').hidden = !idleLike;
+  if (idleLike) {
+    $('entryHint').textContent = ENTRY.hint(chrome.i18n.getMessage('menuRecordThisTab') || 'Record this tab with IronMemo',
+                                            entryShortcut);
+  }
+  const note = s.entryNotice && Date.now() - s.entryNotice.at <= ENTRY_NOTICE_MAX_AGE_MS && (rec || paused || awaitingPerm
+    || s.status === 'starting') ? s.entryNotice : null;
+  $('entryNote').hidden = !note;
+  $('entryNote').textContent = note ? (note.kind === 'busy-same' ? ENTRY.busySame : ENTRY.busyOther) : '';
 
   if (s.error) showError(s.error); else { $('err').hidden = true; $('errActions').hidden = true; }
   // Warnings while recording (device lost/returned, tab capture ended) do not change the

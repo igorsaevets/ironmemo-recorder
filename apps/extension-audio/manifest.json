@@ -12,8 +12,19 @@
     "tabCapture",
     "offscreen",
     "storage",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "contextMenus"
   ],
+
+  "commands": {
+    "record-this-tab": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "__MSG_commandRecordThisTab__"
+    }
+  },
 
   "optional_permissions": [],
 

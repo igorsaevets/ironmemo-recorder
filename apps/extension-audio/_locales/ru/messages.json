@@ -10,5 +10,13 @@
   "actionTitle": {
     "message": "IronMemo Audio Recorder",
     "description": "Всплывающая подсказка на иконке в панели."
+  },
+  "menuRecordThisTab": {
+    "message": "Записать эту вкладку в IronMemo",
+    "description": "Пункт контекстного меню страницы и вкладки в полосе вкладок: начинает запись звука этой вкладки."
+  },
+  "commandRecordThisTab": {
+    "message": "Записать эту вкладку",
+    "description": "Описание горячей клавиши на chrome://extensions/shortcuts: записывает открытую вкладку."
   }
 }

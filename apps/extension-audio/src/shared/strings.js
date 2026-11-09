@@ -369,6 +369,24 @@ export const POPUP = Object.freeze({
   micOnlyFix: 'Record tab audio too',
 });
 
+/**
+ * P300-28d: «Record this tab» — the context-menu item (page menus, and the tab strip's own menu from Chrome 150) and
+ * the keyboard command. The item's own label lives in _locales (menuRecordThisTab), so Chrome shows it in the
+ * browser's language; the hint quotes that label as Chrome shows it.
+ */
+export const ENTRY = Object.freeze({
+  hint: (label, shortcut) => `Meeting in another tab or window? Right-click that tab and choose “${label}”`
+    + (shortcut ? `, or press ${shortcut} while it is open.` : '.'),
+  busyOther: 'IronMemo is already recording another tab. Stop that recording first, then record this tab.',
+  busySame: 'This tab is already being recorded.',
+  // Chrome's own text: «Extension has not been invoked for the current page (see activeTab permission). Chrome pages
+  // cannot be captured.» It means the tab was not chosen for IronMemo, or left that site since (the right is cleared).
+  // Measured 2026-11-09 (CfT 152/157): a chrome://version tab chosen from the tab strip WAS recorded, so this text
+  // must not say browser pages can never be recorded.
+  notCapturable: (label) => `Chrome did not allow recording this tab. Chrome allows it right after you choose the tab: `
+    + `right-click the tab and choose “${label}” again, or open the tab and press Start recording.`,
+});
+
 /** P300-23: version and install source, so a test build is never mistaken for the store one. */
 export const BUILD = Object.freeze({
   // 'normal' is any .crx install; only the store's own package carries the store item id (P300-23b).
