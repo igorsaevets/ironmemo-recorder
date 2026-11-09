@@ -1,4 +1,4 @@
-import { loadSettings, saveSettingsPatch } from '../shared/settings-store.js';
+import { clearSourceChoice, confirmMicOnly, loadSettings, micOnlyConfirmed, saveSettingsPatch } from '../shared/settings-store.js';
 import { getByPath, estimateMBPerHour } from '../shared/settings-schema.js';
 import { ENTRY, POPUP } from '../shared/strings.js';
 import { listAudioDevices, resolveDevice, DEVICE_CLASS } from '../shared/audio-devices.js';
@@ -25,6 +25,7 @@ const NOTICE_ID = 'cloud-option-2026-09';
 
 let levelPoll = null;
 let settingsValues = null;
+let askingMode = false; // P300-23c: Start was pressed with an unconfirmed 'mic'; the choice buttons start the recording
 let micPickerGen = 0;
 let micDebounce = null;
 
@@ -119,10 +120,12 @@ async function init() {
   } catch { entryShortcut = ''; }
   const first = await state();
   window.__ironmemoBoot = { getStateMs: Math.round(performance.now() - tBoot), status: first.status, at: Date.now() };
+  // clickedAt: точка отсчёта для замера холодного старта (B3) — от клика до 'recording'.
+  // P300-10: Start is disabled in popup.html and refresh() enables it; its handler is attached BEFORE that, so an
+  // enabled Start always has one (a click while the popup was still loading used to vanish without feedback).
+  $('start').addEventListener('click', () => onStart(Date.now()));
   await refresh();
 
-  // clickedAt: точка отсчёта для замера холодного старта (B3) — от клика до 'recording'.
-  $('start').addEventListener('click', () => send('START', { clickedAt: Date.now() }));
   $('pause').addEventListener('click', async () => {
     const s = await state();
     send(s.status === 'paused' ? 'RESUME' : 'PAUSE');
@@ -178,30 +181,72 @@ async function renderConfig() {
 }
 
 /**
- * P300-23: mic-only is what a fresh install of ≤2.2.0 records, and it survives the default
- * change for anyone whose settings were ever saved (the mic picker saves them all). A call
- * recorded that way has nobody else in it, so say so before Start and offer the switch.
+ * P300-23: mic-only is what a fresh install of ≤2.2.0 records, and it survived the default change for anyone whose
+ * settings were ever saved (the mic picker and Options saved them all). A call recorded that way has nobody else in
+ * it, so say so before Start and offer the switch. P300-23c: the user answers once — meeting (microphone + tab) or
+ * voice note (microphone only, kept in ironmemo.sourceChoice.v1) — and a confirmed voice-note user is not asked again.
  */
 async function renderModeWarn(v) {
   const box = $('modeWarn');
-  if (getByPath(v, 'source.mode') !== 'mic') { box.hidden = true; return; }
-  const fix = $('modeFix');
-  fix.textContent = POPUP.micOnlyFix;
-  fix.onclick = async () => {
-    // P300-23b: the switch is for the next recording, and one may have started since the popup opened
-    if (await isRecordingActive()) { setModeWarnActive(true); return; }
-    fix.disabled = true;
-    await saveSettingsPatch({ 'source.mode': 'mic+tab' });
-    await renderConfig();
-  };
+  if (getByPath(v, 'source.mode') !== 'mic' || await micOnlyConfirmed()) {
+    box.hidden = true;
+    askingMode = false;
+    return;
+  }
+  $('modeFix').textContent = POPUP.micOnlyFix;
+  $('modeKeep').textContent = POPUP.micOnlyKeep;
+  $('modeFix').onclick = () => chooseMode('mic+tab');
+  $('modeKeep').onclick = () => chooseMode('mic');
   box.hidden = false;
   setModeWarnActive(await isRecordingActive());
 }
 
+/** P300-23c: Start with a stored 'mic' nobody confirmed asks first; the answer then starts the recording. */
+async function onStart(clickedAt) {
+  try {
+    if (getByPath(await loadSettings(), 'source.mode') === 'mic' && !(await micOnlyConfirmed())) {
+      askingMode = true;
+      if ($('modeWarn').hidden) await renderConfig();
+      setModeWarnActive(false);
+      $('start').hidden = true;
+      $('modeFix').focus();
+      return;
+    }
+  } catch (e) {
+    console.warn('[popup] mode check', e); // never block a recording on this check
+  }
+  await send('START', { clickedAt });
+}
+
+async function chooseMode(mode) {
+  // P300-23b: the choice is for the next recording, and one may have started since the popup opened
+  if (await isRecordingActive()) { setModeWarnActive(true); return; }
+  const clickedAt = Date.now();
+  const startAfter = askingMode;
+  $('modeFix').disabled = $('modeKeep').disabled = true;
+  try {
+    if (mode === 'mic') await confirmMicOnly('popup');
+    else {
+      await saveSettingsPatch({ 'source.mode': 'mic+tab' });
+      await clearSourceChoice();
+    }
+  } catch (e) {
+    $('modeFix').disabled = $('modeKeep').disabled = false;
+    showError(`Could not save the choice: ${e?.message ?? e}`);
+    return;
+  }
+  askingMode = false;
+  await renderConfig();
+  if (startAfter) await send('START', { clickedAt });
+  else await refresh();
+}
+
 /** While a recording runs, the warning is about that recording and the switch waits for the next one. */
 function setModeWarnActive(active) {
-  $('modeWarnText').textContent = active ? POPUP.micOnlyWarnActive : POPUP.micOnlyWarn;
-  $('modeFix').disabled = active;
+  const asking = askingMode && !active;
+  $('modeWarnText').textContent = active ? POPUP.micOnlyWarnActive : asking ? POPUP.micOnlyAsk : POPUP.micOnlyWarn;
+  $('modeWarn').classList.toggle('asking', asking);
+  $('modeFix').disabled = $('modeKeep').disabled = active;
 }
 
 async function renderMicPicker(v) {
@@ -334,7 +379,8 @@ async function refresh() {
     awaiting_perm: 'Waiting for microphone permission (see the open tab)',
   }[s.status] ?? s.status;
 
-  $('start').hidden = rec || paused || awaitingPerm;
+  if (rec || paused || awaitingPerm) askingMode = false; // a recording started elsewhere answers nothing
+  $('start').hidden = rec || paused || awaitingPerm || askingMode;
   $('pause').hidden = !(rec || paused);
   $('stop').hidden  = !(rec || paused);
   $('pause').textContent = paused ? 'Resume' : 'Pause';

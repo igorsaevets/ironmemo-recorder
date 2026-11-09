@@ -14,6 +14,10 @@ import {
 
 const KEY = 'ironmemo.settings.v1';
 const PROFILES_KEY = 'ironmemo.profiles.v1';
+// P300-23c: the user's own answer «voice note: microphone only» for a stored 'mic'. Kept apart from the settings
+// object: a 'mic' stored by a build whose default was 'mic' (≤2.2.0), or by the old mic picker that saved every
+// default, says nothing about what the user records, and SETTINGS_SCHEMA_VERSION never changed to tell them apart.
+const SOURCE_CHOICE_KEY = 'ironmemo.sourceChoice.v1';
 
 export async function loadSettings() {
   const raw = await chrome.storage.local.get(KEY);
@@ -47,10 +51,31 @@ export function storedKeys(stored) {
   return stored ? SETTINGS.filter((s) => getByPath(stored, s.key) !== undefined).map((s) => s.key) : [];
 }
 
+const sameValue = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The schema values that differ from this build's defaults — the only ones storage keeps (P300-23c). A stored
+ * default pins the default of its day: Options saved the whole object, and a stored 'mic' outlived the mic+tab
+ * default (a40cb02). A value equal to today's default is dropped, so it follows the next default change too.
+ */
+export function nonDefaultValues(values) {
+  const base = defaultSettings();
+  const out = {};
+  for (const s of SETTINGS) {
+    const v = getByPath(values, s.key);
+    if (v !== undefined && !sameValue(v, getByPath(base, s.key))) setByPath(out, s.key, v);
+  }
+  return out;
+}
+
 export async function saveSettings(values) {
-  values.__schemaVersion = SETTINGS_SCHEMA_VERSION;
-  values.__savedAt = new Date().toISOString();
-  await chrome.storage.local.set({ [KEY]: values });
+  const stored = nonDefaultValues(values);
+  stored.__schemaVersion = SETTINGS_SCHEMA_VERSION;
+  stored.__savedAt = new Date().toISOString();
+  stored.__savedBy = globalThis.chrome?.runtime?.getManifest?.()?.version ?? null;
+  await chrome.storage.local.set({ [KEY]: stored });
+  values.__schemaVersion = stored.__schemaVersion;
+  values.__savedAt = stored.__savedAt;
   return values;
 }
 
@@ -66,10 +91,28 @@ export async function saveSettingsPatch(patch) {
   return loadSettings();
 }
 
+/** Reset = a fresh install: nothing stored, so every value follows the build's defaults (P300-23c). */
 export async function resetSettings() {
-  const d = defaultSettings();
-  await chrome.storage.local.set({ [KEY]: d });
-  return d;
+  await chrome.storage.local.remove([KEY, SOURCE_CHOICE_KEY]);
+  return defaultSettings();
+}
+
+/** P300-23c: did the user answer «voice note: microphone only»? (Not asked when the stored mode is not 'mic'.) */
+export async function micOnlyConfirmed() {
+  try {
+    return (await chrome.storage.local.get(SOURCE_CHOICE_KEY))[SOURCE_CHOICE_KEY]?.mode === 'mic';
+  } catch {
+    return false;
+  }
+}
+
+/** `via`: where the user chose microphone only — 'popup' (the one-time question) or 'options' (the Options page). */
+export async function confirmMicOnly(via) {
+  await chrome.storage.local.set({ [SOURCE_CHOICE_KEY]: { mode: 'mic', at: Date.now(), via } });
+}
+
+export async function clearSourceChoice() {
+  await chrome.storage.local.remove(SOURCE_CHOICE_KEY);
 }
 
 /** Применить пресет поверх текущих значений (не сбрасывая остальное). */

@@ -366,7 +366,10 @@ export const POPUP = Object.freeze({
   // remove what Chrome plays from the mic signal, so not even an echo of them is left.
   micOnlyWarn: 'Microphone only: other people on a call will not be in the recording.',
   micOnlyWarnActive: 'This recording is microphone only: other people on the call are not in it. Stop it to switch.',
-  micOnlyFix: 'Record tab audio too',
+  // P300-23c: Start with a stored «Microphone only» the user never confirmed waits for this answer, once.
+  micOnlyAsk: 'Choose once before recording: a meeting needs tab audio, or the other people on the call are not recorded.',
+  micOnlyFix: 'Meeting: record tab audio too',
+  micOnlyKeep: 'Voice note: microphone only',
 });
 
 /**

@@ -68,6 +68,7 @@ a.promo:hover, a.promo:focus { color: var(--accent); text-decoration: underline;
              background: rgba(240,162,56,.1); border: 1px solid rgba(240,162,56,.4); color: #ffd9a0; }
 .mode-warn[hidden] { display: none; }
 .mode-warn .btn { margin-top: 6px; width: 100%; }
+.mode-warn.asking { border-color: rgba(240,162,56,.95); color: #ffe7c2; }
 
 /* [hidden] must beat .consent's display:flex — same specificity, later rule wins.
  * v0.3.2 shipped without this and the overlay stayed on screen after «Продолжить». */

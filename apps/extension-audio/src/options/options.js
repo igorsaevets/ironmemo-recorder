@@ -9,7 +9,7 @@ import {
   getByPath, setByPath, isVisible, validate, estimateMBPerHour, checkRuntimeSupport, checkWebCodecsSupport,
 } from '../shared/settings-schema.js';
 import {
-  loadSettings, saveSettings, resetSettings, applyPreset,
+  loadSettings, saveSettings, resetSettings, applyPreset, confirmMicOnly,
   listProfiles, saveProfile, deleteProfile, exportProfile, importProfile,
 } from '../shared/settings-store.js';
 import {
@@ -17,6 +17,9 @@ import {
 } from '../shared/audio-devices.js';
 
 let values = null;
+// P300-23c: «Microphone only» chosen ON this page (the mode differed when the page loaded) is the user's own answer,
+// so the popup does not ask «meeting or voice note» about it. A 'mic' that was already stored is not an answer.
+let modeAtLoad = null;
 let stageFilter = 'mvp';
 let audioDevices = { inputs: [], outputs: [], hasLabels: false };
 
@@ -26,6 +29,7 @@ init();
 
 async function init() {
   values = await loadSettings();
+  modeAtLoad = getByPath(values, 'source.mode');
   $('schemaVer').textContent = SETTINGS_SCHEMA_VERSION;
 
   await refreshDevices();
@@ -427,13 +431,19 @@ async function onSave() {
     flash(`Не сохранено: ${errors.length} конфликт(ов) нужно устранить.`, 'error');
     return;
   }
+  // P300-23c: only what differs from the defaults is stored (saveSettings), so a future default reaches every
+  // value the user did not change.
   await saveSettings(values);
+  const mode = getByPath(values, 'source.mode');
+  if (mode === 'mic' && modeAtLoad !== 'mic') await confirmMicOnly('options');
+  modeAtLoad = mode;
   flash('Сохранено. Настройки применятся к следующей записи.', 'ok');
 }
 
 async function onReset() {
   if (!confirm('Сбросить все настройки к значениям по умолчанию?')) return;
   values = await resetSettings();
+  modeAtLoad = getByPath(values, 'source.mode');
   renderForm(); refreshDerived();
   flash('Сброшено к значениям по умолчанию.', 'ok');
 }

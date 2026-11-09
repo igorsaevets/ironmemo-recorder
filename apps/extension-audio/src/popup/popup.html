@@ -41,10 +41,12 @@
 
   <div class="config" id="config"></div>
 
-  <!-- P300-23: mic-only records nobody else on a call; one click switches to microphone + tab. -->
+  <!-- P300-23: mic-only records nobody else on a call. P300-23c: until the user answers once (meeting = microphone +
+       tab, voice note = microphone only), a stored 'mic' shows this choice, and Start waits for the answer. -->
   <div class="mode-warn" id="modeWarn" hidden>
     <div id="modeWarnText"></div>
     <button id="modeFix" class="btn tiny"></button>
+    <button id="modeKeep" class="btn tiny"></button>
   </div>
 
   <!-- One-time notice for people who accepted the recording notice before transcription existed:
@@ -57,7 +59,8 @@
   <canvas id="wave" class="wave" width="292" height="60" hidden></canvas>
 
   <div class="actions">
-    <button id="start" class="btn primary">Start recording</button>
+    <!-- P300-10: disabled until the popup is ready; refresh() enables it after its handler is attached. -->
+    <button id="start" class="btn primary" disabled>Start recording</button>
     <button id="pause" class="btn" hidden>Pause</button>
     <button id="stop"  class="btn danger" hidden>Stop</button>
   </div>
