@@ -1,5 +1,8 @@
-# CWS Listing Description — v2.2.4 draft
+# CWS Listing Description — v2.2.5 draft
 
+v2.2.5 (2026-11-09, P300-29): the «New in» line names the one user-visible change in 2.2.5 — a «Microphone only»
+setting left by an older version makes the first Start ask once «Meeting» or «Voice note» (P300-23c); the 2.2.4,
+2.2.3, 2.2.2, 2.2.1 and 2.2.0 items stay in the same paragraph.
 v2.2.4 (2026-11-09, P300-28e): the «New in» line names the one user-visible change in 2.2.4 — «Record this tab with
 IronMemo» on the tab's and the page's right-click menu, and the Ctrl+Shift+Y shortcut (P300-28d); the 2.2.3, 2.2.2,
 2.2.1 and 2.2.0 items stay in the same paragraph.
@@ -51,7 +54,7 @@ Click Transcribe on any recording to send it to IronMemo for a text transcript a
 • The local recording stays on your device — the upload is a copy, not a move
 • You can delete the server copy at any time from the Recordings page
 
-🆕 New in 2.2.4: record a meeting from another tab or window without switching to it: right-click that tab and choose "Record this tab with IronMemo". The same item is on the page's right-click menu, and Ctrl+Shift+Y (⌘+Shift+Y on a Mac) records the tab you are on. New in 2.2.3: when a recording has no speech in it (say, a muted or blocked microphone), the Recordings page says so and tells you what to check, instead of offering to send the same file again; recordings that hold only your microphone are marked "Microphone only". New in 2.2.2: a link to transcribe your recordings on ironmemo.com — in the popup and the Recordings page. New in 2.2.1: a new install records your microphone and the tab together (before, only the microphone), and the popup warns you when only your microphone is being recorded. New in 2.2.0: credits and free minutes on the Recordings page, the price before an upload, a clear "waiting for payment" state, and accounts with several workspaces.
+🆕 New in 2.2.5: if an older version left IronMemo recording only your microphone, the first Start asks once whether it is a meeting ("Meeting: record tab audio too", so the other people are in the recording) or a voice note ("Voice note: microphone only"), and your answer starts the recording. New in 2.2.4: record a meeting from another tab or window without switching to it: right-click that tab and choose "Record this tab with IronMemo". The same item is on the page's right-click menu, and Ctrl+Shift+Y (⌘+Shift+Y on a Mac) records the tab you are on. New in 2.2.3: when a recording has no speech in it (say, a muted or blocked microphone), the Recordings page says so and tells you what to check, instead of offering to send the same file again; recordings that hold only your microphone are marked "Microphone only". New in 2.2.2: a link to transcribe your recordings on ironmemo.com — in the popup and the Recordings page. New in 2.2.1: a new install records your microphone and the tab together (before, only the microphone), and the popup warns you when only your microphone is being recorded. New in 2.2.0: credits and free minutes on the Recordings page, the price before an upload, a clear "waiting for payment" state, and accounts with several workspaces.
 
 ⛔ What it does NOT do
 
@@ -103,7 +106,7 @@ Source code (MIT): https://github.com/igorsaevets/ironmemo-recorder
 • Локальная запись остаётся на устройстве — загружается копия, не оригинал
 • Серверную копию можно удалить в любой момент со страницы «Записи»
 
-🆕 Новое в 2.2.4: встречу в другой вкладке или окне можно записать, не переключаясь на неё: нажмите на эту вкладку правой кнопкой и выберите «Записать эту вкладку в IronMemo». Тот же пункт есть в меню страницы, а Ctrl+Shift+Y (⌘+Shift+Y на Mac) записывает открытую вкладку. Новое в 2.2.3: если в записи нет речи (например, микрофон был выключен или заблокирован), страница «Записи» прямо говорит об этом и подсказывает, что проверить, а не предлагает отправить тот же файл ещё раз; записи только с вашего микрофона помечены «Microphone only». Новое в 2.2.2: ссылка на расшифровку записей на ironmemo.com — в окне расширения и на странице «Записи». Новое в 2.2.1: после установки записываются сразу микрофон и звук вкладки (раньше — только микрофон), а окно расширения предупреждает, когда записывается только ваш микрофон. Новое в 2.2.0: кредиты и бесплатные минуты на странице «Записи», цена до загрузки, понятный статус «ждёт оплаты» и аккаунты с несколькими рабочими пространствами.
+🆕 Новое в 2.2.5: если старая версия оставила запись только с микрофона, первое нажатие Start один раз спросит, встреча это («Meeting: record tab audio too» — тогда собеседники тоже попадут в запись) или голосовая заметка («Voice note: microphone only»), и ваш ответ сразу запускает запись. Новое в 2.2.4: встречу в другой вкладке или окне можно записать, не переключаясь на неё: нажмите на эту вкладку правой кнопкой и выберите «Записать эту вкладку в IronMemo». Тот же пункт есть в меню страницы, а Ctrl+Shift+Y (⌘+Shift+Y на Mac) записывает открытую вкладку. Новое в 2.2.3: если в записи нет речи (например, микрофон был выключен или заблокирован), страница «Записи» прямо говорит об этом и подсказывает, что проверить, а не предлагает отправить тот же файл ещё раз; записи только с вашего микрофона помечены «Microphone only». Новое в 2.2.2: ссылка на расшифровку записей на ironmemo.com — в окне расширения и на странице «Записи». Новое в 2.2.1: после установки записываются сразу микрофон и звук вкладки (раньше — только микрофон), а окно расширения предупреждает, когда записывается только ваш микрофон. Новое в 2.2.0: кредиты и бесплатные минуты на странице «Записи», цена до загрузки, понятный статус «ждёт оплаты» и аккаунты с несколькими рабочими пространствами.
 
 ⛔ Чего НЕ делает
 
@@ -126,6 +129,18 @@ Source code (MIT): https://github.com/igorsaevets/ironmemo-recorder
 ```
 
 ---
+
+## Changes from v2.2.4 listing (v2.2.5)
+
+1. **«New in» line** (EN + RU), runtime-tested in CfT 152.0.7977.82 and 157.0.8103.38 with Chrome's fake microphone
+   and a tone tab (P300-23c bench 34/34 on each; the same bench on the pre-change code 14/34): a stored «Microphone
+   only» without the user's own answer makes Start ask instead of recording; «Meeting» records the microphone and the
+   tab (the tone is in the tab track), «Voice note» the microphone only, and the answer is not asked again
+   (`03-research/2026-11-09-p300-23c-mode-choice/RESULT.md` in the project folder). An update over a profile whose
+   settings an older version wrote: `03-research/2026-11-09-p300-29-release-225/RESULT.md`.
+2. **No new permission**: the manifest differs from 2.2.4 only in `version`.
+3. **Not claimed**: that settings now keep only what differs from the defaults (nothing a user sees), and that Start
+   stays disabled until the popup is ready (P300-10; an early click was lost before, now it is refused).
 
 ## Changes from v2.2.3 listing (v2.2.4)
 

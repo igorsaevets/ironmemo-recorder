@@ -13,7 +13,7 @@ never copied here. This file sits outside `apps/extension-audio/`, so it never e
 |---|---|---|
 | Name | `IronMemo: Free Audio Recorder & Transcribe Meetings & AI Notetaker` (66 of 75 chars; RU name 66) | `_locales/<lang>/messages.json` → `extensionName`. The store takes it from the package: it changes only with a new version |
 | Summary | EN 121, RU 115 of 132 chars | `_locales/<lang>/messages.json` → `extensionDescription`, same rule |
-| Detailed description | EN + RU saved with the 2.2.3 draft on 2026-11-08, the «New in» paragraph now opening with 2.2.3 (SHA-256 of each locale checked after a reload: EN `e0226459…`, RU `5766d684…`). The 2.2.4 text (the paragraph opening with «New in 2.2.4») is ready in the draft file and not in the console yet | `docs/cws-listing-draft.md` |
+| Detailed description | EN + RU saved with the 2.2.3 draft on 2026-11-08, the «New in» paragraph now opening with 2.2.3 (SHA-256 of each locale checked after a reload: EN `e0226459…`, RU `5766d684…`). The 2.2.4 text (the paragraph opening with «New in 2.2.4») is ready (the draft file at `b0b2d80`) and not in the console yet; the draft file now holds the 2.2.5 text (opening with «New in 2.2.5»), uploaded after 2.2.4 | `docs/cws-listing-draft.md` |
 | Category | Workflow & Planning | public listing, 2026-10-17 |
 | Languages | English, Russian | public listing, 2026-10-17 |
 | Single purpose | **not recorded here yet** | Dashboard → Privacy tab; copy it in on the next console visit |
@@ -88,6 +88,20 @@ On 2026-10-17 it answered HTTP 200, contained the Limited Use statement, and sho
 - Support: https://github.com/igorsaevets/ironmemo-recorder/issues
 - Homepage (`homepage_url`): https://igorsaevets.github.io/ironmemo-recorder/
 
+## In 2.2.5 — «Meeting or voice note» for an old «Microphone only» (P300-23c, P300-10; release prepared 2026-11-09, P300-29; not submitted: 2.2.3 is in review and 2.2.4 goes first)
+
+- Settings storage keeps only the values that differ from the build's defaults (Options used to store the whole
+  object, so every default of its day stayed pinned); Reset removes the stored object. A stored «Microphone only» the
+  user never confirmed (`ironmemo.sourceChoice.v1` holds the answer) makes Start ask once: «Meeting: record tab audio
+  too» or «Voice note: microphone only»; the answer starts the recording. Start ships disabled and is enabled when the
+  popup is ready (P300-10: an early click was lost).
+- Measured on CfT 152 and 157: `tests/test_p300_23c_mode_choice.py` 34/34 each, the pre-change code 14/34
+  (`03-research/2026-11-09-p300-23c-mode-choice/RESULT.md`, project folder). Every store version since 0.6.0 has the
+  same 68 settings and the same defaults as 2.2.5 except `source.mode` (`mic` up to 2.2.0) — so an old whole object
+  holds no other stale default.
+- No new permission, no privacy-policy change: the answer is a recording preference in `chrome.storage.local`, which
+  the policy's §1, §4 and §9 already name. The manifest differs from 2.2.4 only in `version`.
+
 ## In 2.2.4 — «Record this tab» (P300-28d; release prepared 2026-11-09, P300-28e; not submitted while 2.2.3 is in review)
 
 - A right-click item «Record this tab with IronMemo» on web pages and, from Chrome 150, on a tab in the tab strip, and
@@ -153,6 +167,7 @@ On 2026-10-17 it answered HTTP 200, contained the Limited Use statement, and sho
 
 | Version | Submitted | Status | Summary |
 |---|---|---|---|
+| 2.2.5 | Not yet. Release commit of 2026-11-09 (P300-29); zip, benches and the update over an old profile: `03-research/2026-11-09-p300-29-release-225/RESULT.md` (project folder) | Prepared; uploaded after 2.2.4 is published | A «Microphone only» setting left by an older version makes the first Start ask once «Meeting» (tab audio too) or «Voice note» (microphone only); settings keep only what differs from the defaults; Start is enabled when the popup is ready |
 | 2.2.4 | Not yet. Release commit `b0b2d80` (2026-11-09, P300-28e). Zip `builds/ironmemo-recorder-v2.2.4.zip`: 49 files, 244 431 B, SHA-256 `5d18459f6997baee899af3e053295c5de52e671711a5274b69ac1d6fcbf70e01`, byte-equal to the commit; the manifest differs from 2.2.3 only in `version`, `permissions` (+ `contextMenus`) and `commands`. Benches green (smoke 8/8, first start OK, recording 20/20, sources 25/25, build 43/43, engines 96/96, mock ingest 137/137, «Record this tab» on the unpacked zip 16/16 on CfT 152 and 157); an update 2.2.3 → 2.2.4 keeps the id and gets Ctrl+Shift+Y and the menu item (CfT 152/157, 6/6); production 22/22 on a fresh account. `03-research/2026-11-09-p300-28e-release-224/RESULT.md` (project folder) | Waiting for 2.2.3 to be published (the update service still served 2.2.2 at 2026-11-09 05:46 UTC) | «Record this tab with IronMemo» on the right-click menu of a tab (Chrome 150+) and of a page, and Ctrl+Shift+Y: records that tab, in any window, also a background one, without switching to it |
 | 2.2.3 | 2026-11-08 (owner submitted; the console read `Status: Pending review`, Draft 2.2.3, at 2026-11-09 00:21 UTC). Draft uploaded and descriptions saved by the agent with the owner's go-ahead. `compare_crx.py → VERDICT: OK` (draft CRX 244 913 B, 48/48 byte-equal to `builds/ironmemo-recorder-v2.2.3.zip`, SHA-256 `71905dff…`; the store adds only `_metadata/verified_contents.json` and `update_url`). Benches on the release tree all green (smoke 8/8, first start OK, recording 20/20, sources 25/25, build 43/43, engines 96/96, mock ingest 137/137); production 22/22 twice on fresh accounts: a normal recording (completed, `build.version` 2.2.3 in the capture report) and a silent one (the server answered `error.409.recording_no_speech`, the row read «No speech heard», no credit charged) — `03-research/2026-11-08-p300-27-release-223/RESULT.md` | Pending review | A recording the server ends as «no speech» reads «No speech heard — nothing to transcribe.» with what to check and no Retry; the Recordings page marks microphone-only recordings «Microphone only»; every `capture-report.json` names the build that created it |
 | 2.2.2 | 2026-10-30 (owner submitted, dialog «Your extension was submitted for review»; `Status: Pending review`, Submit button disabled). Draft uploaded + descriptions saved by the agent, `compare_crx.py → VERDICT: OK` (48/48 byte-equal, store adds only `_metadata/verified_contents.json` and `update_url`). Prod bench 21/21 on a fresh `+p222prod` account (`03-research/2026-10-30-p300-24c-release-222/RESULT.md`) | Published: the listing says «Updated October 31, 2026» (40 users on 2026-11-08). The public CRX fetched 2026-11-08 through `clients2.google.com/service/update2/crx` (242 208 B, SHA-256 `8916eb77468ac82e1189fe1e9f9636e1545396e264ff303a39f3a6156b90a741`) matches `builds/ironmemo-recorder-v2.2.2.zip`, 48 of 48 files byte-equal. A production run of that zip on 2026-11-08 passed 21/21: the upload reached MinIO on our own host (server log), and the DELETE removed both the database row and the stored objects (`03-research/2026-11-08-upload-check/RESULT.md`) | A link in the popup footer and the Recordings header to `ironmemo.com/transcribe` (UTM-tagged for traffic analytics only, no user data); the small «Chrome Web Store» build line is hidden for a normal store install (it stays visible with the orange highlight for unpacked / sideload / admin builds, which is the only case where the diagnostic is useful) |
