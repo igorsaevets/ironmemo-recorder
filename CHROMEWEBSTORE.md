@@ -99,6 +99,25 @@ On 2026-10-17 it answered HTTP 200, contained the Limited Use statement, and sho
 - Support: https://github.com/igorsaevets/ironmemo-recorder/issues
 - Homepage (`homepage_url`): https://igorsaevets.github.io/ironmemo-recorder/
 
+## In 2.2.6 — the server's reason for a failed recording (P300-30 / BACKLOG P300-7; code 2026-11-13, not built yet)
+
+- A recording the server failed for a reason it names gets that reason and the one action that helps, instead of
+  «Failed: IronMemo could not process the recording» + Retry (which re-sent a finished upload): «IronMemo is looking
+  into this recording» (staff were notified; the row reads the recording again about once a minute while the
+  Recordings page is visible, and on «Check again»), «IronMemo needs this recording uploaded again» and «The upload did
+  not finish» («Upload again» sends the local recording as a new one), «Already on IronMemo» («Open the earlier
+  recording»), «IronMemo could not read this file». A key this version does not know keeps the old row. Keys and their
+  server texts: iron-note-backend origin/main `b6f0d182` (`recordings_ext/errors.py`, `views.py` `_recording_to_dto`).
+- A 429 / 503 with `Retry-After` (header or `params.retry_after`) is not retried earlier than asked, and the page's
+  once-a-minute re-read of a parked or held row waits it out too; a wait over 5 minutes ends the background retries
+  with «too many requests — try later». The upload gates' 403 `error.403.email_required` pauses the upload with
+  «verify your e-mail», like the local check.
+- Measured on the mock server only (`.claude/scripts/test_ingest.py` on CfT 152; project folder
+  `03-research/2026-11-13-p300-30-server-reasons/RESULT.md`): these outcomes come from storage loss, holds and staff
+  verdicts, which cannot be caused on production on demand.
+- No new permission, no privacy-policy change: the two fields now kept (`failure_under_investigation`,
+  `duplicate_of`) come from the recording's status answer that the extension already reads and stores.
+
 ## In 2.2.5 — «Meeting or voice note» for an old «Microphone only» (P300-23c, P300-10; release prepared 2026-11-09, P300-29; draft uploaded 2026-11-13, P300-29b; submitted by the owner 2026-11-13, pending review)
 
 - Settings storage keeps only the values that differ from the build's defaults (Options used to store the whole

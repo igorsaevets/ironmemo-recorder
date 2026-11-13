@@ -458,6 +458,8 @@ function renderRoleRow(role, g) {
 
 const PREVIEW_LINES = 20;
 const NO_RETRY = ['too_large', 'too_long', 'unsupported', 'no_mix', 'multi_segment', 'no_file', 'recovered_invalid', 'payment', 'insufficient_credits', 'wrong_account'];
+// P300-30: failed-recording outcomes the server names (controller.js FAILURE_KEYS), each rendered with its own action.
+const SERVER_OUTCOMES = new Set(['staff_notified', 'needs_reupload', 'upload_incomplete', 'duplicate', 'file_incomplete']);
 // create_unknown reasons where the server DID answer the check (controller.js resolveUnknownCreate).
 const CHECK_REFUSED = ['ambiguous_create', 'forbidden', 'not_found', 'client'];
 const expandedSids = new Set();               // transcript panels the user expanded ("Show all")
@@ -590,13 +592,32 @@ function renderIngest(el, s) {
       cls = 'warn'; status = S.noSpeech; hint = escapeHtml(S.noSpeechHint);
       if (job.serverDeleted) banners.push(['muted', escapeHtml(S.noSpeechDeleted)]);
       else if (job.recordingId && !running) buttons.push(['delete-server', S.btnDeleteServer, 'danger']);
+    } else if (SERVER_OUTCOMES.has(r)) {
+      // P300-30 (BACKLOG P300-7): the server named what happened. Retry would re-send a finished upload, and Dismiss
+      // leads to «Transcribe again» with the same file; each outcome gets the one action that helps.
+      if (r === 'staff_notified') {
+        cls = 'warn'; status = S.staffNotified; hint = escapeHtml(S.staffNotifiedHint);
+        if (!job.serverDeleted) buttons.push(['check-parked', running ? S.checkingParked : S.btnCheckAgain, '']);
+      } else if (r === 'needs_reupload' || r === 'upload_incomplete') {
+        status = r === 'needs_reupload' ? S.needsReupload : S.uploadIncomplete;
+        hint = escapeHtml(r === 'needs_reupload' ? S.needsReuploadHint : S.uploadIncompleteHint);
+        if (!sessionCapturing && !running) buttons.push(['transcribe', S.btnUploadAgain, 'primary']);
+      } else if (r === 'duplicate') {
+        cls = 'warn'; status = S.duplicateUpload; hint = escapeHtml(S.duplicateUploadHint);
+        const original = job.server?.duplicate_of;
+        if (original) buttons.push(['open-link', S.btnOpenOriginal, 'primary', ingest.meetingPageUrl(job, original)]);
+      } else {
+        status = S.fileIncomplete; hint = escapeHtml(S.fileIncompleteHint);
+      }
+      if (job.serverDeleted) banners.push(['muted', escapeHtml(S.noSpeechDeleted)]);
+      else if (job.recordingId && !running) buttons.push(['delete-server', S.btnDeleteServer, 'danger']);
     } else {
       status = S.failed(reasonText(r));
       const human = S.reasonHints[r];
       hint = human ? escapeHtml(human) : (job.lastError?.message ? escapeHtml(job.lastError.message) : '');
       if (!NO_RETRY.includes(r)) buttons.push(['ingest-retry', S.btnRetry, 'primary']);
     }
-    if (r !== 'no_speech') buttons.push(['ingest-cancel', S.btnDismiss, 'danger']);
+    if (r !== 'no_speech' && !SERVER_OUTCOMES.has(r)) buttons.push(['ingest-cancel', S.btnDismiss, 'danger']);
   } else if (st === 'paused') {
     cls = 'muted';
     status = S.paused[job.stateReason] ?? S.pausedOther(job.stateReason);

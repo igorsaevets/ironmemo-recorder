@@ -134,6 +134,21 @@ export const S = Object.freeze({
   noSpeech: 'No speech heard — nothing to transcribe.',
   noSpeechHint: 'IronMemo could not hear any speech in this recording, so there is no transcript. Play it here to check: if it is silent, the microphone was muted, blocked or not the one your call uses, or the tab played no sound. Sending the same file again gives the same result.',
   noSpeechDeleted: 'Deleted on IronMemo. The local recording is kept in this browser.',
+  // P300-30 (BACKLOG P300-7): the server's other named outcomes of a failed recording (iron-note-backend origin/main
+  // b6f0d182, views.py _recording_to_dto). The first hint sentence follows the server's own text for the key
+  // (recordings_ext/errors.py); the rest says what the buttons on this row do.
+  staffNotified: 'IronMemo is looking into this recording.',
+  staffNotifiedHint: 'Processing failed on IronMemo’s side, and its team was notified. You do not need to do anything: while this page is visible, it checks the recording again about once a minute. The local recording stays in this browser.',
+  needsReupload: 'IronMemo needs this recording uploaded again.',
+  needsReuploadHint: 'The audio of this recording is no longer available on IronMemo, so it cannot be processed. The recording is still in this browser: Upload again sends it as a new recording.',
+  uploadIncomplete: 'The upload did not finish.',
+  uploadIncompleteHint: 'IronMemo did not receive the whole file, so there is nothing to process. The recording is still in this browser: Upload again sends it as a new recording.',
+  duplicateUpload: 'Already on IronMemo.',
+  duplicateUploadHint: 'This is the same audio as a recording you uploaded earlier. Open that one for the transcript and the summary.',
+  fileIncomplete: 'IronMemo could not read this file.',
+  fileIncompleteHint: 'The file looks unfinished: IronMemo found no readable audio index in it, so it cannot be processed. Sending the same file again gives the same result. Play it here to check it.',
+  btnUploadAgain: 'Upload again',
+  btnOpenOriginal: 'Open the earlier recording',
   lostSession: 'Your IronMemo session is no longer valid.',
   lostSessionHint: (emailMode) => (emailMode
     ? 'Reconnect verifies your e-mail again (a one-time code) and continues this upload under the same IronMemo account.'
@@ -173,6 +188,11 @@ export const S = Object.freeze({
     captcha: 'IronMemo asks for a captcha on this network',
     server_error: 'IronMemo could not process the recording',
     no_speech: 'IronMemo heard no speech in the recording',
+    staff_notified: 'IronMemo is looking into this recording',
+    needs_reupload: 'IronMemo needs the recording uploaded again',
+    upload_incomplete: 'the upload did not finish',
+    duplicate: 'the same audio is already on IronMemo',
+    file_incomplete: 'IronMemo could not read the file',
     server_deleted: 'the recording was deleted on IronMemo',
     not_found: 'the transcript is not on the server yet',
     shape: 'the server answered in an unexpected form',

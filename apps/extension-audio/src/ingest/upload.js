@@ -103,7 +103,13 @@ export function sleep(ms, signal) {
   });
 }
 
-/** Bounded exponential backoff with jitter — for retryable errors only. */
+/**
+ * P300-30: the longest server-requested wait (Retry-After) that a background retry sits out. A longer one ends the
+ * retries at once: the row then says «too many requests — try later» and Retry stays with the user.
+ */
+export const RETRY_AFTER_MAX_MS = 5 * 60 * 1000;
+
+/** Bounded exponential backoff with jitter — for retryable errors only; never earlier than the server's Retry-After. */
 export async function withRetry(fn, { attempts = 6, baseMs = 2000, maxMs = 60_000, signal, log = () => {}, what = 'call' } = {}) {
   let last;
   for (let i = 0; i < attempts; i++) {
@@ -113,8 +119,14 @@ export async function withRetry(fn, { attempts = 6, baseMs = 2000, maxMs = 60_00
       last = e;
       if (e?.name === 'AbortError' || !isRetryable(e)) throw e;
       if (i === attempts - 1) break;
-      const wait = Math.min(maxMs, baseMs * 2 ** i) * (0.5 + Math.random());
-      log('retry', { what, attempt: i + 1, of: attempts, kind: e.kind ?? e.name, status: e.status ?? null, waitMs: Math.round(wait) });
+      const asked = Number.isFinite(e?.retryAfterMs) ? e.retryAfterMs : null;
+      if (asked != null && asked > RETRY_AFTER_MAX_MS) {
+        log('retry_after_too_long', { what, attempt: i + 1, status: e.status ?? null, retryAfterMs: asked });
+        throw e;
+      }
+      const backoff = Math.min(maxMs, baseMs * 2 ** i) * (0.5 + Math.random());
+      const wait = asked != null ? Math.max(backoff, asked + Math.random() * 500) : backoff;
+      log('retry', { what, attempt: i + 1, of: attempts, kind: e.kind ?? e.name, status: e.status ?? null, waitMs: Math.round(wait), retryAfterMs: asked });
       await sleep(wait, signal);
     }
   }
@@ -188,6 +200,9 @@ export function summarizeRecording(rec) {
     // P300-26: the server's named outcome of a failed recording (views.py _recording_to_dto, since
     // 2026-11-04). Machine keys, not prose: kept only when they look like one.
     failure_reason: serverKey(rec.failure_reason), failure_message_key: serverKey(rec.failure_message_key),
+    // P300-30: staff were paged about this failure, and — for an acknowledged duplicate — which recording it repeats.
+    failure_under_investigation: typeof rec.failure_under_investigation === 'boolean' ? rec.failure_under_investigation : null,
+    duplicate_of: typeof rec.duplicate_of === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rec.duplicate_of) ? rec.duplicate_of : null,
     // I4b: the transcript panel shows the language and keeps the markdown summary next to the
     // transcript files. `credits_charged` is NOT kept — a placeholder 0 in the DTO
     // (recordings_ext/views.py _recording_to_dto) that must never be shown as a verified charge.

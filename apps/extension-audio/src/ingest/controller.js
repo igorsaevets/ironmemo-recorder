@@ -81,14 +81,37 @@ function parkReason(rec) { return rec?.failed_insufficient_credits ? 'insufficie
  * _recording_to_dto: media fault → hold → staff acknowledgement), so it decides; the reason is the
  * fallback for a DTO without the key. Older failures (`empty_transcript`, all providers empty) carry the
  * same key. Every other failure keeps the generic `server_<status>`.
+ *
+ * P300-30 (BACKLOG P300-7): the other keys `_recording_to_dto` can send (iron-note-backend origin/main b6f0d182,
+ * 2026-11-08: media_faults._MESSAGE_KEYS, source_hold.failure_message_key, acknowledge.CUSTOMER_MESSAGE_KEYS), each
+ * with the server's own sentence in recordings_ext/errors.py. A key not listed here stays generic.
  */
-const NO_SPEECH_KEY = 'error.409.recording_no_speech';
+const FAILURE_KEYS = new Map([
+  ['error.409.recording_no_speech', 'no_speech'],
+  ['error.500.recording_failed_staff_notified', 'staff_notified'],  // a held failure: staff were paged
+  ['error.409.recording_needs_reupload', 'needs_reupload'],         // the stored audio is gone (or staff said so)
+  ['error.409.recording_upload_incomplete', 'upload_incomplete'],   // failure_reason upload_abandoned
+  ['error.409.recording_duplicate_upload', 'duplicate'],            // staff acknowledged a duplicate; see duplicate_of
+  ['error.400.file_incomplete', 'file_incomplete'],                 // no readable audio index
+]);
 function serverFailureReason(rec) {
   if (rec?.failed_insufficient_credits) return 'insufficient_credits';
   const key = rec?.failure_message_key ?? null;
-  if (key === NO_SPEECH_KEY || (key === null && rec?.failure_reason === 'no_speech')) return 'no_speech';
+  if (key !== null && FAILURE_KEYS.has(key)) return FAILURE_KEYS.get(key);
+  if (key === null && rec?.failure_reason === 'no_speech') return 'no_speech';
+  if (key === null && rec?.failure_under_investigation === true) return 'staff_notified';
   return `server_${rec?.status}`;
 }
+
+/**
+ * P300-30: a failed row that the server may still change — staff look into a held failure and then re-run it or
+ * give a verdict (needs_reupload, duplicate). Such a row is re-read like a parked one (checkParked).
+ */
+const HELD_REASONS = new Set(['staff_notified']);
+const isRecheckable = (job) => job.state === PARKED || (job.state === 'error' && HELD_REASONS.has(job.stateReason));
+
+/** P300-30: the server says the file has to be sent again; «Upload again» starts a NEW recording from the local file. */
+const REUPLOAD_REASONS = new Set(['needs_reupload', 'upload_incomplete']);
 
 /**
  * P300-3: a price read (and, P300-3b, an account-line read) that takes longer than this is dropped; a dropped price
@@ -342,7 +365,10 @@ export class IngestController {
 
     try {
       let job;
-      if (existing?.recordingId && existing.state !== 'cancelled' && !existing.serverDeleted) {
+      // P300-30: after «needs reupload» / «upload incomplete» the old server row has no usable audio; the
+      // same row cannot take the file again, so «Upload again» sends it as a new recording.
+      const reupload = existing?.state === 'error' && REUPLOAD_REASONS.has(existing.stateReason);
+      if (existing?.recordingId && existing.state !== 'cancelled' && !existing.serverDeleted && !reupload) {
         job = { ...existing, state: existing.pausedFrom ?? existing.state, pausedFrom: null };
         if (job.state === 'paused' || job.state === 'error') job.state = job.uploadId ? 'uploading' : 'session';
       } else {
@@ -407,8 +433,9 @@ export class IngestController {
       if (needFetch || needCheck) out.push(this.syncCompleted(job.sessionId));
     }
     // P300-2: a parked job — one status read per page open (a top-up re-queues it on the server).
+    // P300-30: the same for a held failure (staff may re-run it or give a verdict).
     for (const job of [...this.jobs.values()]) {
-      if (!acct.hasAccount || job.state !== PARKED || job.localDeleted || job.serverDeleted || this.running.has(job.sessionId)) continue;
+      if (!acct.hasAccount || !isRecheckable(job) || job.localDeleted || job.serverDeleted || this.running.has(job.sessionId)) continue;
       out.push(this.checkParked(job.sessionId));
     }
     if (blocked && !this.resumeTimer) {
@@ -588,6 +615,9 @@ export class IngestController {
       // An unknown create/finalize stays unknown (Retry must check the server first), but it keeps the
       // reason the check failed — `ambiguous_create` or a refused list — so the page can say it.
       else if (job.state === 'create_unknown' || job.state === 'finalize_unknown') job.stateReason = e.kind ?? e.name;
+      // P300-30: the upload gates answer 403 error.403.email_required for an account without a claimed e-mail when
+      // guests get no free minutes (views.py _processing_gate) — the same pause as the local check above.
+      else if (e instanceof ApiError && e.code === 'error.403.email_required') { job.pausedFrom = job.state; job.state = 'paused'; job.stateReason = 'email_required'; }
       else { job.state = 'error'; job.stateReason = e.kind ?? e.name; }
       await save(job);
       log('job_failed', { sid, state: job.state, reason: job.stateReason, kind: e.kind ?? e.name, status: e.status ?? null, message: e.message });
@@ -643,8 +673,8 @@ export class IngestController {
 
   /** `?workspace=` opens the web app in the recording's workspace (src/api/workspace-context.tsx URL_PARAM,
    *  iron-note-frontend origin/main 3044935): a per-tab context there, never saved. */
-  meetingPageUrl(job) {
-    return `${this.origin}${PATHS.meetingPage(job.recordingId)}${job.workspaceId ? `?workspace=${encodeURIComponent(job.workspaceId)}` : ''}`;
+  meetingPageUrl(job, recordingId = job.recordingId) {
+    return `${this.origin}${PATHS.meetingPage(recordingId)}${job.workspaceId ? `?workspace=${encodeURIComponent(job.workspaceId)}` : ''}`;
   }
 
   async poll(job, signal, save) {
@@ -677,6 +707,8 @@ export class IngestController {
           return;
         }
         job.state = 'error'; job.stateReason = serverFailureReason(rec);
+        // P300-30: a held failure is re-read like a parked row; the first automatic read comes a full interval later
+        if (HELD_REASONS.has(job.stateReason)) job.parked = { since: Date.now(), checkedAt: Date.now(), checks: 0, lastError: null };
         await save(job);
         return;
       }
@@ -815,8 +847,10 @@ export class IngestController {
    */
   async checkParked(sid, { minAgeMs = 0 } = {}) {
     const job = this.jobs.get(sid);
-    if (!job || job.state !== PARKED || job.localDeleted || job.serverDeleted || !job.recordingId || this.running.has(sid)) return job ?? null;
-    if (minAgeMs && Date.now() - (job.parked?.checkedAt ?? 0) < minAgeMs) return job;
+    if (!job || !isRecheckable(job) || job.localDeleted || job.serverDeleted || !job.recordingId || this.running.has(sid)) return job ?? null;
+    // the page's own triggers (minAgeMs > 0) also wait out a Retry-After the last read was given (P300-30); the
+    // button and page open read at once
+    if (minAgeMs && (Date.now() - (job.parked?.checkedAt ?? 0) < minAgeMs || (job.parked?.notBefore ?? 0) > Date.now())) return job;
     const lease = await ledger.acquireLease(sid);
     if (!lease.ok) return job;
     const abort = new AbortController();
@@ -832,6 +866,7 @@ export class IngestController {
       } catch (e) {
         if (e?.name === 'AbortError') throw e;
         mark(errInfo(e));
+        if (Number.isFinite(e?.retryAfterMs)) job.parked.notBefore = Date.now() + e.retryAfterMs;
         if (e instanceof ApiError && e.status === 404) {
           // the same reading as syncCompleted: another account, a merge still carrying the rows across, or gone
           const st = await this.auth.status();
@@ -844,7 +879,18 @@ export class IngestController {
       }
       job.server = summarizeRecording(rec); job.authLost = null;
       mark(null);
-      if (rec.status === PARKED) { job.stateReason = parkReason(rec); await save(job); return job; }
+      if (rec.status === PARKED) {
+        if (job.state !== PARKED) { job.state = PARKED; job.parked = { ...job.parked, since: Date.now() }; job.meetingPage = this.meetingPageUrl(job); }
+        job.stateReason = parkReason(rec); await save(job); return job;
+      }
+      // P300-30: a held failure that is still a failure keeps its row; the reason is read again because a staff
+      // verdict (needs_reupload, duplicate) replaces «looking into it»
+      if (job.state === 'error' && rec.status === 'error') {
+        job.stateReason = serverFailureReason(rec);
+        await save(job);
+        this.log('held_checked', { sid, reason: job.stateReason, checks: job.parked?.checks });
+        return job;
+      }
       this.log('unparked', { sid, status: rec.status, parkedMs: Date.now() - (job.parked?.since ?? Date.now()), checks: job.parked?.checks });
       job.state = 'processing'; job.stateReason = null; job.timings.processingSince = Date.now();
       await save(job);
@@ -866,7 +912,7 @@ export class IngestController {
    * parked job not read within `minAgeMs`. A job whose session was lost waits for page open or the button.
    */
   async checkParkedAll({ minAgeMs = PARKED_RECHECK_MS } = {}) {
-    const due = [...this.jobs.values()].filter((j) => j.state === PARKED && !j.localDeleted && !j.serverDeleted && !j.authLost && !this.running.has(j.sessionId));
+    const due = [...this.jobs.values()].filter((j) => isRecheckable(j) && !j.localDeleted && !j.serverDeleted && !j.authLost && !this.running.has(j.sessionId));
     if (!due.length || !this.hasConsent() || !(await this.hasPermission())) return [];
     if (!(await this.auth.status()).hasAccount) return [];
     return Promise.all(due.map((j) => this.checkParked(j.sessionId, { minAgeMs })));

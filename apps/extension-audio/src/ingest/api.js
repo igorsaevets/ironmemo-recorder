@@ -43,10 +43,12 @@ export const PATHS = Object.freeze({
 
 /** The server answered with a non-2xx status. `kind` drives retry/UI decisions. */
 export class ApiError extends Error {
-  constructor({ status, code = null, message = null, params = null, path = null }) {
+  constructor({ status, code = null, message = null, params = null, path = null, retryAfterMs = null }) {
     super(message || `HTTP ${status}`);
     this.name = 'ApiError';
     this.status = status; this.code = code; this.params = params; this.path = path;
+    // P300-30: how long the server asked us to wait (Retry-After header or params.retry_after); withRetry honours it.
+    this.retryAfterMs = Number.isFinite(retryAfterMs) ? retryAfterMs : null;
     this.kind = classify(status);
     // Error keys that mean more than their HTTP status (recordings_ext/errors.py, origin/main
     // 6720f51, 2026-09-13): the server says "too large" with a 400, not a 413.
@@ -70,8 +72,26 @@ export class ApiError extends Error {
       code: data?.localizable_error ?? null,
       message: data?.error ?? (typeof data?.detail === 'string' ? data.detail : null) ?? `HTTP ${res.status}`,
       params: data?.params ?? null,
+      retryAfterMs: parseRetryAfter(res.headers?.get?.('Retry-After') ?? null, data?.params ?? null),
     });
   }
+}
+
+/**
+ * P300-30 (BACKLOG P300-7): the wait a 429 / 503 asks for, in ms, or null. The header is either delay-seconds or an
+ * HTTP date (RFC 9110 §10.2.3); stapel error envelopes also carry `params.retry_after` (seconds) and the auth
+ * service `params.retry_after_minutes` (iron-note-backend STAPEL-MIGRATION.md, docs/auth-frontend.md).
+ */
+export function parseRetryAfter(header, params, now = Date.now()) {
+  const h = typeof header === 'string' ? header.trim() : '';
+  if (/^\d+$/.test(h)) return Number(h) * 1000;
+  // an HTTP date starts with the day name (IMF-fixdate, RFC 850, asctime); Date.parse alone also takes «-5»
+  if (/^[A-Za-z]{3}/.test(h)) { const at = Date.parse(h); if (Number.isFinite(at)) return Math.max(0, at - now); }
+  const s = Number(params?.retry_after);
+  if (params?.retry_after != null && Number.isFinite(s) && s >= 0) return s * 1000;
+  const m = Number(params?.retry_after_minutes);
+  if (params?.retry_after_minutes != null && Number.isFinite(m) && m >= 0) return m * 60_000;
+  return null;
 }
 
 /** No HTTP answer at all (DNS, TLS, connection reset, offline). The server MAY have acted. */
