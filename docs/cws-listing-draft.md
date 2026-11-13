@@ -1,5 +1,9 @@
-# CWS Listing Description — v2.2.5 draft
+# CWS Listing Description — v2.2.6 draft
 
+v2.2.6 (2026-11-13, P300-30b): the «New in» line names the one user-visible change in 2.2.6 — a recording the
+server failed for a reason it names shows that reason and the one action that helps («Upload again», a link to the
+earlier recording, «nothing to do») instead of a general error with Retry (P300-30); the 2.2.5, 2.2.4, 2.2.3, 2.2.2,
+2.2.1 and 2.2.0 items stay in the same paragraph.
 v2.2.5 (2026-11-09, P300-29): the «New in» line names the one user-visible change in 2.2.5 — a «Microphone only»
 setting left by an older version makes the first Start ask once «Meeting» or «Voice note» (P300-23c); the 2.2.4,
 2.2.3, 2.2.2, 2.2.1 and 2.2.0 items stay in the same paragraph.
@@ -54,7 +58,7 @@ Click Transcribe on any recording to send it to IronMemo for a text transcript a
 • The local recording stays on your device — the upload is a copy, not a move
 • You can delete the server copy at any time from the Recordings page
 
-🆕 New in 2.2.5: if an older version left IronMemo recording only your microphone, the first Start asks once whether it is a meeting ("Meeting: record tab audio too", so the other people are in the recording) or a voice note ("Voice note: microphone only"), and your answer starts the recording. New in 2.2.4: record a meeting from another tab or window without switching to it: right-click that tab and choose "Record this tab with IronMemo". The same item is on the page's right-click menu, and Ctrl+Shift+Y (⌘+Shift+Y on a Mac) records the tab you are on. New in 2.2.3: when a recording has no speech in it (say, a muted or blocked microphone), the Recordings page says so and tells you what to check, instead of offering to send the same file again; recordings that hold only your microphone are marked "Microphone only". New in 2.2.2: a link to transcribe your recordings on ironmemo.com — in the popup and the Recordings page. New in 2.2.1: a new install records your microphone and the tab together (before, only the microphone), and the popup warns you when only your microphone is being recorded. New in 2.2.0: credits and free minutes on the Recordings page, the price before an upload, a clear "waiting for payment" state, and accounts with several workspaces.
+🆕 New in 2.2.6: when IronMemo cannot process a recording and says why, the Recordings page shows that reason and the one step that helps, instead of a general error with Retry: "The upload did not finish" and "IronMemo needs this recording uploaded again" offer "Upload again" (the recording in your browser goes up as a new one), "Already on IronMemo" links to the recording you uploaded earlier, and "IronMemo is looking into this recording" tells you there is nothing to do. New in 2.2.5: if an older version left IronMemo recording only your microphone, the first Start asks once whether it is a meeting ("Meeting: record tab audio too", so the other people are in the recording) or a voice note ("Voice note: microphone only"), and your answer starts the recording. New in 2.2.4: record a meeting from another tab or window without switching to it: right-click that tab and choose "Record this tab with IronMemo". The same item is on the page's right-click menu, and Ctrl+Shift+Y (⌘+Shift+Y on a Mac) records the tab you are on. New in 2.2.3: when a recording has no speech in it (say, a muted or blocked microphone), the Recordings page says so and tells you what to check, instead of offering to send the same file again; recordings that hold only your microphone are marked "Microphone only". New in 2.2.2: a link to transcribe your recordings on ironmemo.com — in the popup and the Recordings page. New in 2.2.1: a new install records your microphone and the tab together (before, only the microphone), and the popup warns you when only your microphone is being recorded. New in 2.2.0: credits and free minutes on the Recordings page, the price before an upload, a clear "waiting for payment" state, and accounts with several workspaces.
 
 ⛔ What it does NOT do
 
@@ -106,7 +110,7 @@ Source code (MIT): https://github.com/igorsaevets/ironmemo-recorder
 • Локальная запись остаётся на устройстве — загружается копия, не оригинал
 • Серверную копию можно удалить в любой момент со страницы «Записи»
 
-🆕 Новое в 2.2.5: если старая версия оставила запись только с микрофона, первое нажатие Start один раз спросит, встреча это («Meeting: record tab audio too» — тогда собеседники тоже попадут в запись) или голосовая заметка («Voice note: microphone only»), и ваш ответ сразу запускает запись. Новое в 2.2.4: встречу в другой вкладке или окне можно записать, не переключаясь на неё: нажмите на эту вкладку правой кнопкой и выберите «Записать эту вкладку в IronMemo». Тот же пункт есть в меню страницы, а Ctrl+Shift+Y (⌘+Shift+Y на Mac) записывает открытую вкладку. Новое в 2.2.3: если в записи нет речи (например, микрофон был выключен или заблокирован), страница «Записи» прямо говорит об этом и подсказывает, что проверить, а не предлагает отправить тот же файл ещё раз; записи только с вашего микрофона помечены «Microphone only». Новое в 2.2.2: ссылка на расшифровку записей на ironmemo.com — в окне расширения и на странице «Записи». Новое в 2.2.1: после установки записываются сразу микрофон и звук вкладки (раньше — только микрофон), а окно расширения предупреждает, когда записывается только ваш микрофон. Новое в 2.2.0: кредиты и бесплатные минуты на странице «Записи», цена до загрузки, понятный статус «ждёт оплаты» и аккаунты с несколькими рабочими пространствами.
+🆕 Новое в 2.2.6: если IronMemo не может обработать запись и называет причину, страница «Записи» показывает эту причину и один шаг, который поможет, а не общую ошибку с кнопкой Retry: при «The upload did not finish» и «IronMemo needs this recording uploaded again» есть кнопка «Upload again» (запись из браузера уйдёт как новая), «Already on IronMemo» ведёт к записи, загруженной раньше, а «IronMemo is looking into this recording» означает, что делать ничего не нужно. Новое в 2.2.5: если старая версия оставила запись только с микрофона, первое нажатие Start один раз спросит, встреча это («Meeting: record tab audio too» — тогда собеседники тоже попадут в запись) или голосовая заметка («Voice note: microphone only»), и ваш ответ сразу запускает запись. Новое в 2.2.4: встречу в другой вкладке или окне можно записать, не переключаясь на неё: нажмите на эту вкладку правой кнопкой и выберите «Записать эту вкладку в IronMemo». Тот же пункт есть в меню страницы, а Ctrl+Shift+Y (⌘+Shift+Y на Mac) записывает открытую вкладку. Новое в 2.2.3: если в записи нет речи (например, микрофон был выключен или заблокирован), страница «Записи» прямо говорит об этом и подсказывает, что проверить, а не предлагает отправить тот же файл ещё раз; записи только с вашего микрофона помечены «Microphone only». Новое в 2.2.2: ссылка на расшифровку записей на ironmemo.com — в окне расширения и на странице «Записи». Новое в 2.2.1: после установки записываются сразу микрофон и звук вкладки (раньше — только микрофон), а окно расширения предупреждает, когда записывается только ваш микрофон. Новое в 2.2.0: кредиты и бесплатные минуты на странице «Записи», цена до загрузки, понятный статус «ждёт оплаты» и аккаунты с несколькими рабочими пространствами.
 
 ⛔ Чего НЕ делает
 
@@ -129,6 +133,21 @@ Source code (MIT): https://github.com/igorsaevets/ironmemo-recorder
 ```
 
 ---
+
+## Changes from v2.2.5 listing (v2.2.6)
+
+1. **«New in» line** (EN + RU), runtime-tested on the mock server with Chrome for Testing 152.0.7977.82
+   (`.claude/scripts/test_ingest.py` 155/155, 18 checks new; `03-research/2026-11-13-p300-30-server-reasons/RESULT.md`
+   in the project folder), each status answer built from iron-note-backend origin/main `b6f0d182`, still its head on
+   2026-11-13: each named outcome shows its own row and button; «Upload again» makes one new recording and leaves the
+   old one; the «Already on IronMemo» link points at the earlier recording's page; an unknown key keeps the old row
+   with Retry. Release suite and production run: `03-research/2026-11-13-p300-30b-release-226/RESULT.md`.
+2. **No new permission**: the manifest differs from 2.2.5 only in `version`.
+3. **Not claimed**: that the web app opens the earlier recording when it sits in another workspace (not tested); that
+   a server's «try again later» wait is honoured (`Retry-After`: measured on the mock server only, and whether
+   production sends it is not known); the «verify your e-mail» pause of an upload (the extension asks for the e-mail
+   before the first upload, so users do not meet it); «IronMemo could not read this file» (in the build, left out of
+   the sentence for length).
 
 ## Changes from v2.2.4 listing (v2.2.5)
 
