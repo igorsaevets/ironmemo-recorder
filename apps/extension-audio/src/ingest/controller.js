@@ -24,7 +24,7 @@ import { pickWorkspace } from './workspace.js';
 import { createAuth, hardenStorage, ACCOUNT_KEY } from './auth.js';
 import { createClaim, CLAIM_GRACE_MS } from './claim.js';
 import * as ledger from './ledger.js';
-import { pickAsset, openAsset, performUpload, withRetry, sleep, summarizeRecording, AssetError, ROLE_SLUG } from './upload.js';
+import { pickAsset, openAsset, performUpload, withRetry, sleep, summarizeRecording, AssetError, ROLE_SLUG, RETRY_AFTER_MAX_MS } from './upload.js';
 import { fetchAndStoreTranscript, requestExport } from './transcript.js';
 
 export const CONSENT_KEY = 'ironmemo.ingestConsent.v1';
@@ -84,7 +84,8 @@ function parkReason(rec) { return rec?.failed_insufficient_credits ? 'insufficie
  *
  * P300-30 (BACKLOG P300-7): the other keys `_recording_to_dto` can send (iron-note-backend origin/main b6f0d182,
  * 2026-11-08: media_faults._MESSAGE_KEYS, source_hold.failure_message_key, acknowledge.CUSTOMER_MESSAGE_KEYS), each
- * with the server's own sentence in recordings_ext/errors.py. A key not listed here stays generic.
+ * with the server's own sentence in recordings_ext/errors.py. A key not listed here stays generic — unless the row
+ * carries `failure_under_investigation: true` (P300-30c): staff are on it whatever the key, so it reads as held.
  */
 const FAILURE_KEYS = new Map([
   ['error.409.recording_no_speech', 'no_speech'],
@@ -99,7 +100,8 @@ function serverFailureReason(rec) {
   const key = rec?.failure_message_key ?? null;
   if (key !== null && FAILURE_KEYS.has(key)) return FAILURE_KEYS.get(key);
   if (key === null && rec?.failure_reason === 'no_speech') return 'no_speech';
-  if (key === null && rec?.failure_under_investigation === true) return 'staff_notified';
+  // the key is absent or unknown here; a known key above still wins over the flag
+  if (rec?.failure_under_investigation === true) return 'staff_notified';
   return `server_${rec?.status}`;
 }
 
@@ -374,6 +376,10 @@ export class IngestController {
       } else {
         const asset = pickAsset(session); // throws AssetError with a user-facing message
         job = this.newJob(session, asset);
+        // P300-30c: a server row this session made before stays on the server (Upload again leaves it) under the same
+        // title; remember it, so that a lost create is never resolved to it (resolveUnknownCreate).
+        const previous = [...(existing?.previousRecordingIds ?? []), existing?.recordingId].filter((id) => typeof id === 'string' && id);
+        if (previous.length) job.previousRecordingIds = [...new Set(previous)];
         const q = opts.quote;
         if (q?.creditsRequired != null) job.quote = { creditsRequired: q.creditsRequired, balance: q.balance ?? null, at: q.at ?? Date.now() };
       }
@@ -655,12 +661,17 @@ export class IngestController {
     throw new ClientRefusal('IronMemo did not prepare a workspace for this account within 2 minutes.', 'no_workspace');
   }
 
-  /** create_unknown → find the recording by this job's unique title; adopt it, else create anew. */
+  /**
+   * create_unknown → find the recording by this job's unique title; adopt it, else create anew. P300-30c: the rows this
+   * session made before (Upload again leaves the failed one in place, same title) are never candidates.
+   */
   async resolveUnknownCreate(job, signal, save) {
     const data = await withRetry(() => this.api.get(`${PATHS.recordings}?workspace_id=${encodeURIComponent(job.workspaceId)}`, { signal }), { signal, log: this.log, what: 'list_after_unknown_create' });
     const items = Array.isArray(data?.recordings) ? data.recordings : (Array.isArray(data) ? data : []);
-    const matches = items.filter((r) => r?.title === job.title);
-    this.log('create_unknown_resolved', { matches: matches.length, listed: items.length });
+    const previous = new Set(job.previousRecordingIds ?? []);
+    const titled = items.filter((r) => r?.title === job.title);
+    const matches = titled.filter((r) => !previous.has(r?.id));
+    this.log('create_unknown_resolved', { matches: matches.length, listed: items.length, earlierRows: titled.length - matches.length });
     if (matches.length === 1) {
       job.recordingId = matches[0].id; job.server = summarizeRecording(matches[0]); job.state = 'uploading'; job.stateReason = null;
       await save(job);
@@ -866,7 +877,8 @@ export class IngestController {
       } catch (e) {
         if (e?.name === 'AbortError') throw e;
         mark(errInfo(e));
-        if (Number.isFinite(e?.retryAfterMs)) job.parked.notBefore = Date.now() + e.retryAfterMs;
+        // P300-30c: capped like withRetry's waits, so a long Retry-After cannot switch the automatic re-reads off for hours
+        if (Number.isFinite(e?.retryAfterMs)) job.parked.notBefore = Date.now() + Math.min(Math.max(0, e.retryAfterMs), RETRY_AFTER_MAX_MS);
         if (e instanceof ApiError && e.status === 404) {
           // the same reading as syncCompleted: another account, a merge still carrying the rows across, or gone
           const st = await this.auth.status();
@@ -879,6 +891,7 @@ export class IngestController {
       }
       job.server = summarizeRecording(rec); job.authLost = null;
       mark(null);
+      delete job.parked.notBefore; // P300-30c: an answered read ends the server's wait (mark() keeps the old fields)
       if (rec.status === PARKED) {
         if (job.state !== PARKED) { job.state = PARKED; job.parked = { ...job.parked, since: Date.now() }; job.meetingPage = this.meetingPageUrl(job); }
         job.stateReason = parkReason(rec); await save(job); return job;
